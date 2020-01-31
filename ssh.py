@@ -131,7 +131,7 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
         super().__init__()
 
         if not "path" in argz:
-            argz["path"] = ""
+            argz["path"] = []
 
         self.argz = argz
         self.ssh = sshShell
@@ -152,15 +152,18 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
         return "Enter Folder" if self.isFolder(value) else "Open File"
 
     def cancel(self):
+
+        self.argz["path"].pop()
         self.ssh.runCmd("cd ..")
 
     #continue if folder
     def next_input(self, args):
 
-        self.argz["path"] += args["path"]
+        self.argz["path"].append(args["path"])
 
         if not self.isFolder(args["path"]):
 
+            self.argz["paths"] = ["".join(self.argz["path"])]
             self.ssh.close()
             return None
 
@@ -174,22 +177,24 @@ class openFileOverSshCommand(sublime_plugin.WindowCommand):
 
     def run(self, **args):
 
-        #open a temp file with the correct extension
-        #I can't just make a new file because I want the syntax to be set based on the remote file's extension
-        ext = self.argz["path"].rfind(".")
-        ext = self.argz["path"][ext:] if ext != -1 else ""
-        file = tempfile.NamedTemporaryFile(suffix=ext)
-        view = self.window.open_file(file.name)
+        for path in self.argz["paths"]:
 
-        #used to set the view/buffer path which prevents the save dialog from showing up on file save
-        #It also looks nice when you right click on the file name at the top of the window
-        #...well as nice as it can ;)
-        view.settings().set("ssh_fake_path", self.argz["server"] + "/" + self.argz["path"])
-        view.settings().set("ssh_server", self.argz["server"])
-        view.settings().set("ssh_path", self.argz["path"])
-        view.set_status("ssh_true", "Saving to " + self.argz["server"] + self.argz["path"])
+            #open a temp file with the correct extension
+            #I can't just make a new file because I want the syntax to be set based on the remote file's extension
+            ext = path.rfind(".")
+            ext = path[ext:] if ext != -1 else ""
+            file = tempfile.NamedTemporaryFile(suffix=ext)
+            view = self.window.open_file(file.name)
 
-        file.close()
+            #used to set the view/buffer path which prevents the save dialog from showing up on file save
+            #It also looks nice when you right click on the file name at the top of the window
+            #...well as nice as it can ;)
+            view.settings().set("ssh_fake_path", self.argz["server"] + "/" + path)
+            view.settings().set("ssh_server", self.argz["server"])
+            view.settings().set("ssh_path", path)
+            view.set_status("ssh_true", "Saving to " + self.argz["server"] + path)
+
+            file.close()
 
     def input(self, args):
 
