@@ -141,7 +141,7 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
         return value.endswith("/")
 
     def list_items(self):
-        return self.ssh.runCmd("ls -1p")
+        return self.ssh.runCmd("ls -1Lp")
 
     #gray placeholder text
     def placeholder(self):
@@ -153,7 +153,7 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 
     def cancel(self):
 
-        self.argz["path"].pop()
+        self.argz["path"].pop() if len(self.argz["path"]) > 0 else None
         self.ssh.runCmd("cd ..")
 
     #continue if folder
