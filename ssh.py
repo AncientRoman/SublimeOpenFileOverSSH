@@ -71,17 +71,21 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
         super().__init__()
 
         self.argz = argz
+        self.ssh = None
 
     @staticmethod
     def isSyntaxOk(text):
+
         return "@" in text and ":" in text
 
     #gray placeholder text
     def placeholder(self):
+
         return "user@remote.server:"
 
     #previous value
     def initial_text(self):
+
         return sublime.load_settings(settingsFile).get("server", "")
 
     #syntax check
@@ -92,6 +96,7 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 
         return "syntax valid"
 
+    #check server
     def validate(self, text):
 
         if self.isSyntaxOk(text):
@@ -113,44 +118,79 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 
         self.ssh.runCmd() #get ssh shell ready for commands
 
+        self.argz["server"] = text[:-1]
+
+    #close ssh
     def cancel(self):
-        self.ssh.close()
+
+        if self.ssh:
+            self.ssh.close()
 
     #file selection
     def next_input(self, args):
-
-        self.argz["server"] = args["server"][:-1]
 
         return pathInputHandler(self.argz, self.ssh)
 
 #inputer pallet path input
 class pathInputHandler(sublime_plugin.ListInputHandler):
 
-    def __init__(self, argz, sshShell):
+    def __init__(self, argz, sshShell, oldPath = None):
 
         super().__init__()
 
         if not "path" in argz:
             argz["path"] = []
 
+        if oldPath == None:
+            oldPath = sublime.load_settings(settingsFile).get("path", []) #load once here because confirm overwrites all the paths
+
         self.argz = argz
         self.ssh = sshShell
+        self.oldPath = oldPath
 
     @staticmethod
     def isFolder(value):
+
         return value.endswith("/")
 
+    #ls and initial selection
     def list_items(self):
-        return self.ssh.runCmd("ls -1Lp")
+
+        files = self.ssh.runCmd("ls -1Lp")
+
+        try:
+            files = (files, files.index(self.oldPath[len(self.argz["path"])])) #default selection
+        except (ValueError, IndexError):
+            pass
+
+        return files
 
     #gray placeholder text
     def placeholder(self):
+
         return "file"
 
     #folder or file
     def preview(self, value):
+
         return "Enter Folder" if self.isFolder(value) else "Open File"
 
+    #save value
+    def confirm(self, value):
+
+        self.argz["path"].append(value)
+
+        sublime.load_settings(settingsFile).set("path", self.argz["path"])
+        sublime.save_settings(settingsFile)
+
+        if self.isFolder(value):
+            self.ssh.runCmd("cd " + value)
+        else:
+
+            self.argz["paths"] = ["".join(self.argz["path"])]
+            self.ssh.close()
+
+    #cd ..
     def cancel(self):
 
         self.argz["path"].pop() if len(self.argz["path"]) > 0 else None
@@ -159,17 +199,7 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
     #continue if folder
     def next_input(self, args):
 
-        self.argz["path"].append(args["path"])
-
-        if not self.isFolder(args["path"]):
-
-            self.argz["paths"] = ["".join(self.argz["path"])]
-            self.ssh.close()
-            return None
-
-        self.ssh.runCmd("cd " + args["path"])
-
-        return pathInputHandler(self.argz, self.ssh)
+        return pathInputHandler(self.argz, self.ssh, self.oldPath) if self.isFolder(args["path"]) else None
 
 
 #the command that is run from the command pallet

@@ -6,7 +6,7 @@ Clone or dowload this repo into the Sublime Packages folder.<br>
 This plugin should work on MacOS, Linux, and Windows.
 
 ## Usage
-Run the Open File Over SSH command from the command palette.<br>
+Run the Open File Over SSH command from the command palette.
 1. Open Sublime's Command Palette (ctrl-shft-p)
 2. Type in Open File Over SSH, press enter
 3. Type in the scp-like path to your server (user@server.ext:), and press enter
