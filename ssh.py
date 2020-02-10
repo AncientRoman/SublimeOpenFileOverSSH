@@ -153,10 +153,20 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 
         return value.endswith("/")
 
+    @staticmethod
+    def isAllFiles(value):
+
+        return value == "*"
+
     #ls and initial selection
     def list_items(self):
 
         files = self.ssh.runCmd("ls -1Lp")
+
+        for file in files:
+            if not self.isFolder(file):
+                files.append("*")
+                break
 
         try:
             files = (files, files.index(self.oldPath[len(self.argz["path"])])) #default selection
@@ -173,7 +183,12 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
     #folder or file
     def preview(self, value):
 
-        return "Enter Folder" if self.isFolder(value) else "Open File"
+        if self.isFolder(value):
+            return "Enter Folder"
+        elif self.isAllFiles(value):
+            return "Open All Files"
+        else:
+            return "Open File"
 
     #save value
     def confirm(self, value):
@@ -186,8 +201,11 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
         if self.isFolder(value):
             self.ssh.runCmd("cd " + value)
         else:
-
-            self.argz["paths"] = ["".join(self.argz["path"])]
+            if not self.isAllFiles(value):
+                self.argz["paths"] = ["".join(self.argz["path"])]
+            else:
+                self.argz["paths"] = ["".join(self.argz["path"][:-1] + [file]) for file in self.ssh.runCmd("ls -1Lp | egrep -v /$")]
+                print(self.argz["paths"])
             self.ssh.close()
 
     #cd ..
