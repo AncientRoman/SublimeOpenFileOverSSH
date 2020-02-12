@@ -1,9 +1,9 @@
-import sublime_plugin
+import os
 import sublime
 import tempfile
 import subprocess
-import os
-from time import sleep
+import sublime_plugin
+
 
 settingsFile = "SublimeOpenFileOverSSH.sublime-settings"
 isWindows = (sublime.platform() == "windows")
