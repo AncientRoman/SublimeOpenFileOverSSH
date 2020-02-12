@@ -1,14 +1,14 @@
-import sublime_plugin
+import os
 import sublime
 import tempfile
 import subprocess
-import os
-from time import sleep
+import sublime_plugin
 
-settingsFile = "ssh.sublime-settings"
+
+settingsFile = "SublimeOpenFileOverSSH.sublime-settings"
 isWindows = (sublime.platform() == "windows")
 
-
+#gets the required startup info for Popen
 def getStartupInfo():
 
     #On Windows, the command shell is opened while the Popen command is running and this fixes that
@@ -19,76 +19,234 @@ def getStartupInfo():
 
     return startupinfo
 
+#handles the input pallet's ssh shell
+class SshShell():
 
-#gets the text input from the command pallet
-class serverAndPathInputHandler(sublime_plugin.TextInputHandler):
+    seekingString = b"A random string for seeking"
 
+    def __init__(self, userAndServer):
+
+        self.shell = subprocess.Popen(['ssh', "-tt", userAndServer], stdin=subprocess.PIPE, stdout=subprocess.PIPE, startupinfo=getStartupInfo())
+        self.shell.stdout.readline() #run it
+
+    @staticmethod
+    def trimNewLine(str):
+        return str.rstrip(b"\n").rstrip(b"\r");
+
+    def isAlive(self):
+        return self.shell.poll() == None
+
+    def runCmd(self, cmd = ""):
+
+        if cmd != "":
+            cmd += "; "
+        cmd = cmd.encode()
+        self.shell.stdin.write(cmd + b"echo '" + self.seekingString + b"'\n")
+        self.shell.stdin.flush()
+
+        lines = []
+
+        while True:
+
+            lines.append(self.trimNewLine(self.shell.stdout.readline()))
+            if lines[-1].startswith(self.seekingString):
+                break;
+
+        return [x.decode() for x in lines[1:-1]]
+
+    def close(self):
+
+        self.shell.stdin.write(b"exit\n")
+        self.shell.stdin.flush()
+        self.shell.stdin.close()
+        print("SublimeOpenFileOverSSH: Waiting for ssh to exit")
+        self.shell.wait()
+        print("SublimeOpenFileOverSSH: ssh finished with return code %d" % self.shell.returncode)
+
+#input pallet server input
+class serverInputHandler(sublime_plugin.TextInputHandler):
+
+    def __init__(self, argz):
+
+        super().__init__()
+
+        self.argz = argz
+        self.ssh = None
+
+    @staticmethod
+    def isSyntaxOk(text):
+
+        return "@" in text and ":" in text
+
+    #gray placeholder text
     def placeholder(self):
-        return "user@remote.server:path/to/file" #the syntax for ssh, scp, and rsync
 
+        return "user@remote.server:"
+
+    #previous value
     def initial_text(self):
-        return sublime.load_settings(settingsFile).get("serverAndPath", "")
 
+        return sublime.load_settings(settingsFile).get("server", "")
+
+    #syntax check
     def preview(self, text):
 
-        #make sure the syntax is followed
-
-        if not "@" in text or not ":" in text:
+        if not self.isSyntaxOk(text):
             return "invalid syntax"
 
         return "syntax valid"
 
+    #check server
     def validate(self, text):
 
-        #is the syntax ok?
-        try:
-            server, path = text.split(":")
-        except:
-            return False
+        if self.isSyntaxOk(text):
 
+            self.ssh = SshShell(text[:-1])
 
-        #check if the file exists
-        p = subprocess.Popen(['ssh', server, "test", "-f", path, "&>", "/dev/null"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=getStartupInfo()) #ssh file test
-        p.communicate()
+            if self.ssh.isAlive(): #check if not dead
+                return True
 
-        if(p.returncode != 0):
+            sublime.error_message("The specified server, {}, was not found".format(text)) #the dialog looks ugly, but I can't think of a better way
 
-            sublime.error_message("The specified file, {}, was not found".format(path)) #the dialog looks ugly, but I can't think of a better way
-            return False
+        return False
 
-        return True
-
+    #save value
     def confirm(self, text):
 
-        sublime.load_settings(settingsFile).set("serverAndPath", text)
+        sublime.load_settings(settingsFile).set("server", text)
         sublime.save_settings(settingsFile)
+
+        self.ssh.runCmd() #get ssh shell ready for commands
+
+        self.argz["server"] = text[:-1]
+
+    #close ssh
+    def cancel(self):
+
+        if self.ssh:
+            self.ssh.close()
+
+    #file selection
+    def next_input(self, args):
+
+        return pathInputHandler(self.argz, self.ssh)
+
+#inputer pallet path input
+class pathInputHandler(sublime_plugin.ListInputHandler):
+
+    def __init__(self, argz, sshShell, oldPath = None):
+
+        super().__init__()
+
+        if not "path" in argz:
+            argz["path"] = []
+
+        if oldPath == None:
+            oldPath = sublime.load_settings(settingsFile).get("path", []) #load once here because confirm overwrites all the paths
+
+        self.argz = argz
+        self.ssh = sshShell
+        self.oldPath = oldPath
+
+    @staticmethod
+    def isFolder(value):
+
+        return value.endswith("/")
+
+    @staticmethod
+    def isAllFiles(value):
+
+        return value == "*"
+
+    #ls and initial selection
+    def list_items(self):
+
+        files = self.ssh.runCmd("/usr/bin/ls -1Lp")
+
+        for file in files:
+            if not self.isFolder(file):
+                files.append("*")
+                break
+
+        try:
+            files = (files, files.index(self.oldPath[len(self.argz["path"])])) #default selection
+        except (ValueError, IndexError):
+            pass
+
+        return files
+
+    #gray placeholder text
+    def placeholder(self):
+
+        return "file"
+
+    #folder or file
+    def preview(self, value):
+
+        if self.isFolder(value):
+            return "Enter Folder"
+        elif self.isAllFiles(value):
+            return "Open All Files"
+        else:
+            return "Open File"
+
+    #save value
+    def confirm(self, value):
+
+        self.argz["path"].append(value)
+
+        sublime.load_settings(settingsFile).set("path", self.argz["path"])
+        sublime.save_settings(settingsFile)
+
+        if self.isFolder(value):
+            self.ssh.runCmd("cd " + value)
+        else:
+            if not self.isAllFiles(value):
+                self.argz["paths"] = ["".join(self.argz["path"])]
+            else:
+                self.argz["paths"] = ["".join(self.argz["path"][:-1] + [file]) for file in self.ssh.runCmd("/usr/bin/ls -1Lp | egrep -v /$")]
+            self.ssh.close()
+
+    #cd ..
+    def cancel(self):
+
+        self.argz["path"].pop() if len(self.argz["path"]) > 0 else None
+        self.ssh.runCmd("cd ..")
+
+    #continue if folder
+    def next_input(self, args):
+
+        return pathInputHandler(self.argz, self.ssh, self.oldPath) if self.isFolder(args["path"]) else None
+
 
 #the command that is run from the command pallet
 class openFileOverSshCommand(sublime_plugin.WindowCommand):
 
-    def run(self, server_and_path):
+    def run(self, **args):
 
-        server, path = server_and_path.split(":") #get the server/user and the path
+        for path in self.argz["paths"]:
 
-        #open a temp file with the correct extension
-        #I can't just make a new file because I want the syntax to be set based on the remote file's extension
-        ext = path.rfind(".")
-        ext = path[ext:] if ext != -1 else ""
-        file = tempfile.NamedTemporaryFile(suffix=ext)
-        view = self.window.open_file(file.name)
+            #open a temp file with the correct extension
+            #I can't just make a new file because I want the syntax to be set based on the remote file's extension
+            ext = path.rfind(".")
+            ext = path[ext:] if ext != -1 else ""
+            file = tempfile.NamedTemporaryFile(suffix=ext)
+            view = self.window.open_file(file.name)
 
-        #used to set the view/buffer path which prevents the save dialog from showing up on file save
-        #It also looks nice when you right click on the file name at the top of the window
-        #...well as nice as it can ;)
-        view.settings().set("ssh_fake_path", server + "/" + path)
-        view.settings().set("ssh_server", server)
-        view.settings().set("ssh_path", path)
-        view.set_status("ssh_true", "Saving to " + server_and_path)
+            #used to set the view/buffer path which prevents the save dialog from showing up on file save
+            #It also looks nice when you right click on the file name at the top of the window
+            #...well as nice as it can ;)
+            view.settings().set("ssh_fake_path", self.argz["server"] + "/" + path)
+            view.settings().set("ssh_server", self.argz["server"])
+            view.settings().set("ssh_path", path)
+            view.set_status("ssh_true", "Saving to " + self.argz["server"] + path)
 
-        file.close()
+            file.close()
 
     def input(self, args):
-        return serverAndPathInputHandler()
+
+        self.argz = {}
+        return serverInputHandler(self.argz)
 
 #sets the view's buffer to the remote file's contents
 class openFileOverSshTextCommand(sublime_plugin.TextCommand):
@@ -100,8 +258,8 @@ class openFileOverSshTextCommand(sublime_plugin.TextCommand):
         p = subprocess.Popen(['ssh', self.view.settings().get("ssh_server"), "cat", self.view.settings().get("ssh_path")], stdout=subprocess.PIPE, startupinfo=getStartupInfo())
         txt, _ = p.communicate()
 
-        self.view.set_encoding('UTF-8')
-        self.view.replace(edit, sublime.Region(0, self.view.size()), str(txt, "UTF-8"))
+        self.view.set_encoding("UTF-8")
+        self.view.replace(edit, sublime.Region(0, self.view.size()), str(txt, "UTF-8", "ignore"))
 
 #takes care of writing the file to the remote location and keeping track of modifications
 class openFileOverSshEventListener(sublime_plugin.ViewEventListener):
@@ -113,7 +271,6 @@ class openFileOverSshEventListener(sublime_plugin.ViewEventListener):
 
     @classmethod
     def is_applicable(cls, settings):
-        #return True
         return settings.has("ssh_server") and settings.has("ssh_path")
 
     @classmethod
