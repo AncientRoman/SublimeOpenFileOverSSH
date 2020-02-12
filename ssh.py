@@ -4,6 +4,7 @@ import tempfile
 import subprocess
 import os
 from time import sleep
+import binascii
 
 settingsFile = "SublimeOpenFileOverSSH.sublime-settings"
 isWindows = (sublime.platform() == "windows")
@@ -254,13 +255,20 @@ class openFileOverSshTextCommand(sublime_plugin.TextCommand):
 
     #an edit object is required for modifying a view/buffer and a text command is the only valid way to get one in sublime text 3
 
-    def run(self, edit):
+    def run(self, edit, encoding="UTF-8"):
 
         p = subprocess.Popen(['ssh', self.view.settings().get("ssh_server"), "cat", self.view.settings().get("ssh_path")], stdout=subprocess.PIPE, startupinfo=getStartupInfo())
         txt, _ = p.communicate()
 
-        self.view.set_encoding('UTF-8')
-        self.view.replace(edit, sublime.Region(0, self.view.size()), str(txt, "UTF-8"))
+        self.view.set_encoding(encoding)
+        if encoding == "Hexadecimal":
+
+            hexz = binascii.hexlify(txt).decode("UTF-8")
+            hexz = " ".join([hexz[i:i+4] for i in range(0, len(hexz), 4)]) #add in spaces every 4 chars
+            hexz = "\n".join([hexz[i:i+39] for i in range(0, len(hexz), 40)]) #add newlines every 8 groups of 4 chars (and delete the space)
+            self.view.replace(edit, sublime.Region(0, self.view.size()), hexz)
+        else:
+            self.view.replace(edit, sublime.Region(0, self.view.size()), str(txt, encoding, "ignore"))
 
 #takes care of writing the file to the remote location and keeping track of modifications
 class openFileOverSshEventListener(sublime_plugin.ViewEventListener):
@@ -338,3 +346,11 @@ class openFileOverSshEventListener(sublime_plugin.ViewEventListener):
 
         if self.view.is_scratch():
             self.view.set_scratch(False)
+
+
+    def on_text_command(self, command, args):
+
+        if command == "reopen":
+            return ("open_file_over_ssh_text", args)
+
+        return None
