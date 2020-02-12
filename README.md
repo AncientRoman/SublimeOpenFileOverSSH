@@ -1,4 +1,4 @@
-# SublimeOpenFileOverSSH
+# SublimeOpenFileOverSSH v1.1
 A Sublime Text 3 Plugin that allows a file to be opened on a Remote Machine over ssh and seamlessly edited and saved back to the remote machine
 
 ## Installation
@@ -25,3 +25,7 @@ The file selection is done by opening an ssh connection when the server is given
 ## Important
 You should setup ssh public/private key login to your remote machine.<br>
 It may work without it but I haven't tried.
+
+## What's New?
+v1.1: Added a file browser like interface to the Open File File Over SSH command in the command pallet
+v1.0: First version with Windows support
