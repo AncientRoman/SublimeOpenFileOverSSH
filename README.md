@@ -27,5 +27,5 @@ You should setup ssh public/private key login to your remote machine.<br>
 It may work without it but I haven't tried.
 
 ## What's New?
-v1.1: Added a file browser like interface to the Open File File Over SSH command in the command pallet
+v1.1: Added a file browser like interface to the Open File File Over SSH command in the command pallet<br>
 v1.0: First version with Windows support
