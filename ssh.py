@@ -59,9 +59,9 @@ class SshShell():
         self.shell.stdin.write(b"exit\n")
         self.shell.stdin.flush()
         self.shell.stdin.close()
-        print("Waiting for ssh to exit")
+        print("SublimeOpenFileOverSSH: Waiting for ssh to exit")
         self.shell.wait()
-        print("ssh finished with return code %d" % self.shell.returncode)
+        print("SublimeOpenFileOverSSH: ssh finished with return code %d" % self.shell.returncode)
 
 #input pallet server input
 class serverInputHandler(sublime_plugin.TextInputHandler):
@@ -205,7 +205,6 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
                 self.argz["paths"] = ["".join(self.argz["path"])]
             else:
                 self.argz["paths"] = ["".join(self.argz["path"][:-1] + [file]) for file in self.ssh.runCmd("ls -1Lp | egrep -v /$")]
-                print(self.argz["paths"])
             self.ssh.close()
 
     #cd ..
@@ -259,8 +258,8 @@ class openFileOverSshTextCommand(sublime_plugin.TextCommand):
         p = subprocess.Popen(['ssh', self.view.settings().get("ssh_server"), "cat", self.view.settings().get("ssh_path")], stdout=subprocess.PIPE, startupinfo=getStartupInfo())
         txt, _ = p.communicate()
 
-        self.view.set_encoding('UTF-8')
-        self.view.replace(edit, sublime.Region(0, self.view.size()), str(txt, "UTF-8"))
+        self.view.set_encoding("UTF-8")
+        self.view.replace(edit, sublime.Region(0, self.view.size()), str(txt, "UTF-8", "ignore"))
 
 #takes care of writing the file to the remote location and keeping track of modifications
 class openFileOverSshEventListener(sublime_plugin.ViewEventListener):
