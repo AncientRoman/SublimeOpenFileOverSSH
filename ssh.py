@@ -253,7 +253,7 @@ class globInputHandler(sublime_plugin.TextInputHandler):
     #previous value
     def initial_text(self):
 
-        return ""
+        return sublime.load_settings(settingsFile).get("glob", "")
 
     #syntax check
     def preview(self, text):
@@ -278,10 +278,8 @@ class globInputHandler(sublime_plugin.TextInputHandler):
     #save value
     def confirm(self, text):
 
-        #self.argz["path"].append(text)
-
-        #sublime.load_settings(settingsFile).set("path", self.argz["path"])
-        #sublime.save_settings(settingsFile)
+        sublime.load_settings(settingsFile).set("glob", text)
+        sublime.save_settings(settingsFile)
 
         self.argz["paths"] = ["".join(self.argz["path"][:-1] + [file]) for file in self.getMatchingFiles(text)]
         self.ssh.close()
