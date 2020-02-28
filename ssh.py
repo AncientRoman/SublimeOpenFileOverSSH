@@ -154,11 +154,11 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
         return value.endswith("/")
 
     @staticmethod
-    def isAllFiles(value):
+    def isGlob(value):
 
         return value == "*"
 
-    #ls and initial selection
+    #ls, glob, and initial selection
     def list_items(self):
 
         files = self.ssh.runCmd("/usr/bin/ls -1Lp")
@@ -180,13 +180,13 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 
         return "file"
 
-    #folder or file
+    #folder, file, or glob
     def preview(self, value):
 
         if self.isFolder(value):
             return "Enter Folder"
-        elif self.isAllFiles(value):
-            return "Open All Files"
+        elif self.isGlob(value):
+            return "Input Glob"
         else:
             return "Open File"
 
@@ -200,23 +200,101 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 
         if self.isFolder(value):
             self.ssh.runCmd("cd " + value)
-        else:
-            if not self.isAllFiles(value):
-                self.argz["paths"] = ["".join(self.argz["path"])]
-            else:
-                self.argz["paths"] = ["".join(self.argz["path"][:-1] + [file]) for file in self.ssh.runCmd("/usr/bin/ls -1Lp | egrep -v /$")]
+        elif not self.isGlob(value):
+
+            self.argz["paths"] = ["".join(self.argz["path"])]
             self.ssh.close()
 
     #cd ..
     def cancel(self):
 
-        self.argz["path"].pop() if len(self.argz["path"]) > 0 else None
-        self.ssh.runCmd("cd ..")
+        if len(self.argz["path"]) > 0 and not self.isGlob(self.argz["path"].pop()):
+            self.ssh.runCmd("cd ..")
 
-    #continue if folder
+    #continue if folder or glob
     def next_input(self, args):
 
-        return pathInputHandler(self.argz, self.ssh, self.oldPath) if self.isFolder(args["path"]) else None
+        if self.isFolder(args["path"]):
+            return pathInputHandler(self.argz, self.ssh, self.oldPath)
+        if self.isGlob(args["path"]):
+            return globInputHandler(self.argz, self.ssh)
+        return None
+
+
+#input pallet glob input
+class globInputHandler(sublime_plugin.TextInputHandler):
+
+    def __init__(self, argz, sshShell):
+
+        super().__init__()
+
+        self.argz = argz
+        self.ssh = sshShell
+
+    @staticmethod
+    def isSyntaxOk(text):
+
+        globs = text.split(" ")
+
+        for glob in globs:
+            if not "*" in glob:
+                return False #every space-separated pattern must have a *
+
+        return len(glob) > 0 #must be at least one pattern
+
+    def getMatchingFiles(self, text):
+        return self.ssh.runCmd("/usr/bin/ls -1Lp {} 2> /dev/null | egrep -v /$".format(text)) #ignore ls's error when nothing is found
+
+    #gray placeholder text
+    def placeholder(self):
+
+        return "*.c h*.h"
+
+    #previous value
+    def initial_text(self):
+
+        return ""
+
+    #syntax check
+    def preview(self, text):
+
+        if not self.isSyntaxOk(text):
+            return "invalid syntax"
+
+        return "syntax valid"
+
+    #check server
+    def validate(self, text):
+
+        if self.isSyntaxOk(text):
+
+            if len(self.getMatchingFiles(text)) > 0:
+                return True
+
+            sublime.error_message("No files were found matching the pattern{} '{}'".format("s" if len(text.split(" ")) > 1 else "", text)) #the dialog looks ugly, but I can't think of a better way
+
+        return False
+
+    #save value
+    def confirm(self, text):
+
+        #self.argz["path"].append(text)
+
+        #sublime.load_settings(settingsFile).set("path", self.argz["path"])
+        #sublime.save_settings(settingsFile)
+
+        self.argz["paths"] = ["".join(self.argz["path"][:-1] + [file]) for file in self.getMatchingFiles(text)]
+        self.ssh.close()
+
+    #pop()
+    def cancel(self):
+
+        self.argz["path"].pop() #pop off the * that got us here
+
+    #file selection
+    def next_input(self, args):
+
+        return None
 
 
 #the command that is run from the command pallet
