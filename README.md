@@ -27,7 +27,7 @@ You should setup ssh public/private key login to your remote machine.<br>
 It may work without it but I haven't tried.
 
 ## What's New?
-v1.2b2: glob pattern(s) are saved like the server and path
-v1.2b1: The wildcard (\*) option now opens a text input that allows the user to type in one or more glob patterns such as \*.c h\* However glob patterns are not saved in the settings like the server and path are
+v1.2b2: glob pattern(s) are saved like the server and path<br>
+v1.2b1: The wildcard (\*) option now opens a text input that allows the user to type in one or more glob patterns such as \*.c h\* However glob patterns are not saved in the settings like the server and path are<br>
 v1.1: Added a file browser like interface to the Open File File Over SSH command in the command pallet<br>
 v1.0: First version with Windows support
