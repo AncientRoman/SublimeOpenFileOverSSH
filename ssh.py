@@ -75,7 +75,7 @@ class SshShell():
 
         filePath = filePath.encode()
         seekingString = self.getSeekingString()
-        self.shell.stdin.write(b"cat " + filePath + b"; echo '" + seekingString + b"'\n")
+        self.shell.stdin.write(b"cat " + filePath + b"; echo -e '\\n" + seekingString + b"'\n") #need the \n so seeking string is on its own line
         self.shell.stdin.flush()
 
         lines = []
@@ -86,7 +86,7 @@ class SshShell():
             if lines[-1].startswith(seekingString):
                 break;
 
-        return b"".join(lines[1:-1])
+        return b"".join(lines[1:-1])[0:-2] #remove \n added by echo (two bytes in UTF-8)
 
     def close(self):
 
