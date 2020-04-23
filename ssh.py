@@ -280,7 +280,7 @@ class globInputHandler(sublime_plugin.TextInputHandler):
         return len(glob) > 0 #must be at least one pattern
 
     def getMatchingFiles(self, text):
-        return self.ssh.runCmd("/usr/bin/ls -1Lp {} 2> /dev/null | egrep -v /$".format(text)) #ignore ls's error when nothing is found
+        return self.ssh.runCmd("/usr/bin/ls -1Lpd {} 2> /dev/null | egrep -v /$".format(text)) #ignore ls's error when nothing is found
 
     #gray placeholder text
     def placeholder(self):
