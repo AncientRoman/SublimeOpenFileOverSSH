@@ -390,6 +390,7 @@ class openFileOverSshEventListener(sublime_plugin.ViewEventListener):
 
         self.view = view
         self.diffRef = ""
+        self.viewName = True #name has to change each time its set
 
     @classmethod
     def is_applicable(cls, settings):
@@ -402,6 +403,16 @@ class openFileOverSshEventListener(sublime_plugin.ViewEventListener):
 
     def doHacks(self):
 
+        #Sublime Text 4 is smarter than Sublime Text 3
+        #Sublime Text 4 recognizes if its target (set by view.retarget()) does not exist,
+        #   and if it doesn't it will show the choose a save location dialog before on_pre_save is called
+        #So I will not have a chance to make the temp file and retarget to it
+        #However, for some reason, if you do view.set_name before a view.retarget, sublime won't realize the file doesn't exit
+        #So we can get back to Sublime Text 3's behavior
+        #But but, the name has to be different each time set_name() is called
+        #Idk man, its weird
+        self.viewName = not self.viewName
+        self.view.set_name(str(self.viewName)) #Sets the name so retarget() will behave (see above)
         self.view.retarget(self.view.settings().get("ssh_fake_path")) #sets the view/buffer path so the file name looks nice
         self.view.set_reference_document(self.diffRef) #set the diff ref to the saved original file (otherwise the diffs are all messed up)
         self.view.set_scratch(True) #on_mod sets this to false
