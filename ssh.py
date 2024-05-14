@@ -90,12 +90,13 @@ class SshShell():
 
     def close(self):
 
-        self.shell.stdin.write(b"exit\n")
-        self.shell.stdin.flush()
-        self.shell.stdin.close()
-        print("SublimeOpenFileOverSSH: Waiting for ssh to exit")
-        self.shell.wait()
-        print("SublimeOpenFileOverSSH: ssh finished with return code %d" % self.shell.returncode)
+        if self.isAlive():
+            self.shell.stdin.write(b"exit\n")
+            self.shell.stdin.flush()
+            self.shell.stdin.close()
+            print("SublimeOpenFileOverSSH: Waiting for ssh to exit")
+            self.shell.wait()
+            print("SublimeOpenFileOverSSH: ssh finished with return code %d" % self.shell.returncode)
 
     def __del__(self):
 
@@ -200,7 +201,7 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
     #ls, glob, and initial selection
     def list_items(self):
 
-        files = self.ssh.runCmd("/usr/bin/ls -1Lp")
+        files = self.ssh.runCmd("/bin/ls -1Lp")
 
         for file in files:
             if not self.isFolder(file):
