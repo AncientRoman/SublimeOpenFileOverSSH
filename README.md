@@ -20,11 +20,19 @@ When a remote file is opened, the contents of the file is copied into the buffer
 When the file is saved, the buffer is copied back into the remote file, and sublime is given a temporary file to save to which is later deleted.<br>
 The file transferring is done using Popen's stdin and stdout to ssh, not scp.
 
-The file selection is done by opening an ssh connection when the server is given and `ls` is used to populate the folder/file list on demand
+The file selection is done by opening an ssh connection after the server is input and `ls` is used to populate the folder/file list on demand.
 
 ## Important
 You should setup ssh public/private key login to your remote machine.<br>
 It may work without it but I haven't tried.
+
+## Settings
+Ssh's multiplexing feature is used to speed up connection and authentication when browsing and saving files in short succession.<br>
+The default connection keep alive time is 5 minutes and you can change this by adding the `multiplexing` key in the .sublime-settings file for this package.<br>
+The .sublime-settings file will be created inside of the User folder in the Sublime Packages folder after you connect to your first server.<br>
+The `multiplexing` key accepts keep alive (ControlPersist) times in the `120s` or `5m` formats.<br>
+If your system doesn't support multiplexing or you'd like to disable it for security reasons, set `multiplexing` to `false`.
+
 
 ## What's New?
 v1.3: Support for Sublime Text 4<br>

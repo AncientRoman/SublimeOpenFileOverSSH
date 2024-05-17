@@ -7,10 +7,8 @@ import subprocess
 import sublime_plugin
 
 
-WINDOWS_LINE_ENDING = b'\r\n'
-UNIX_LINE_ENDING = b'\n'
+SETTINGS_FILE = "SublimeOpenFileOverSSH.sublime-settings"
 
-settingsFile = "SublimeOpenFileOverSSH.sublime-settings"
 isWindows = (sublime.platform() == "windows")
 
 viewToShell = {} #Maps view.id() to an sshShell. Allows multiple files to be opened using the same SshShell
@@ -27,6 +25,30 @@ def getStartupInfo():
 
     return startupinfo
 
+#gets the appropriate multiplexing args for ssh from the settings file
+def getMultiplexingArgs():
+
+    settings = sublime.load_settings(SETTINGS_FILE)
+    persist = "5m"
+
+    if settings.has("multiplexing"):
+
+        persist = settings["multiplexing"]
+        if persist in [None, False, 0, "0"]:
+            return []
+        if isinstance(persist, bool) and persist: #True == 1 so must check if its a bool
+            persist = "5m"
+        elif not (isinstance(persist, int) or isinstance(persist, str) and (persist.isdecimal() or persist[-1] in ["m", "s"] and persist[:-1].isdecimal())):
+            print(f"SublimeOpenFileOverSSH: Unrecognized multiplexing setting ({persist}), falling back to default")
+            persist = "5m"
+
+    #Using %C to both escape special characters and obfuscate the connection details
+    #Auto creates a new master socket if it doesn't exist
+    return ["-o", "ControlPath=~/.ssh/SOFOS_cm-%C", "-o", "ControlMaster=auto", "-o", f"ControlPersist={persist}"]
+
+
+
+
 #handles the input pallet's ssh shell
 class SshShell():
 
@@ -34,8 +56,7 @@ class SshShell():
 
     def __init__(self, userAndServer):
 
-        self.shell = subprocess.Popen(['ssh', "-tt", userAndServer], stdin=subprocess.PIPE, stdout=subprocess.PIPE, startupinfo=getStartupInfo())
-        self.shell.stdout.readline() #run it
+        self.shell = subprocess.Popen(["ssh", *getMultiplexingArgs(), userAndServer], stdin=subprocess.PIPE, stdout=subprocess.PIPE, startupinfo=getStartupInfo())
 
     @staticmethod
     def trimNewLine(str):
@@ -63,10 +84,10 @@ class SshShell():
         while True:
 
             lines.append(self.trimNewLine(self.shell.stdout.readline()))
-            if lines[-1].startswith(seekingString):
+            if lines[-1] == seekingString:
                 break;
 
-        return [x.decode() for x in lines[1:-1]]
+        return [x.decode() for x in lines[:-1]]
 
     def readFile(self, filePath):
 
@@ -83,10 +104,10 @@ class SshShell():
         while True:
 
             lines.append(self.shell.stdout.readline())
-            if lines[-1].startswith(seekingString):
+            if lines[-1][:-1] == seekingString:
                 break;
 
-        return b"".join(lines[1:-1])[0:-2] #remove \n added by echo (two bytes in UTF-8)
+        return b"".join(lines[:-1])[:-1] #remove \n added by echo
 
     def close(self):
 
@@ -125,7 +146,7 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
     #previous value
     def initial_text(self):
 
-        return sublime.load_settings(settingsFile).get("server", "")
+        return sublime.load_settings(SETTINGS_FILE).get("server", "")
 
     #syntax check
     def preview(self, text):
@@ -152,8 +173,8 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
     #save value
     def confirm(self, text):
 
-        sublime.load_settings(settingsFile).set("server", text)
-        sublime.save_settings(settingsFile)
+        sublime.load_settings(SETTINGS_FILE).set("server", text)
+        sublime.save_settings(SETTINGS_FILE)
 
         self.ssh.runCmd() #get ssh shell ready for commands
 
@@ -182,7 +203,7 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
             argz["path"] = []
 
         if oldPath == None:
-            oldPath = sublime.load_settings(settingsFile).get("path", []) #load once here because confirm overwrites all the paths
+            oldPath = sublime.load_settings(SETTINGS_FILE).get("path", []) #load once here because confirm overwrites all the paths
 
         self.argz = argz
         self.ssh = argz["sshShell"]
@@ -235,8 +256,8 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 
         self.argz["path"].append(value)
 
-        sublime.load_settings(settingsFile).set("path", self.argz["path"])
-        sublime.save_settings(settingsFile)
+        sublime.load_settings(SETTINGS_FILE).set("path", self.argz["path"])
+        sublime.save_settings(SETTINGS_FILE)
 
         if self.isFolder(value):
             self.ssh.runCmd("cd " + value)
@@ -281,7 +302,7 @@ class globInputHandler(sublime_plugin.TextInputHandler):
         return len(glob) > 0 #must be at least one pattern
 
     def getMatchingFiles(self, text):
-        return self.ssh.runCmd("/usr/bin/ls -1Lpd {} 2> /dev/null | egrep -v /$".format(text)) #ignore ls's error when nothing is found
+        return self.ssh.runCmd("/bin/ls -1Lpd {} 2> /dev/null | egrep -v /$".format(text)) #ignore ls's error when nothing is found
 
     #gray placeholder text
     def placeholder(self):
@@ -291,7 +312,7 @@ class globInputHandler(sublime_plugin.TextInputHandler):
     #previous value
     def initial_text(self):
 
-        return sublime.load_settings(settingsFile).get("glob", "")
+        return sublime.load_settings(SETTINGS_FILE).get("glob", "")
 
     #syntax check
     def preview(self, text):
@@ -301,7 +322,7 @@ class globInputHandler(sublime_plugin.TextInputHandler):
 
         return "syntax valid"
 
-    #check server
+    #check files
     def validate(self, text):
 
         if self.isSyntaxOk(text):
@@ -316,8 +337,8 @@ class globInputHandler(sublime_plugin.TextInputHandler):
     #save value
     def confirm(self, text):
 
-        sublime.load_settings(settingsFile).set("glob", text)
-        sublime.save_settings(settingsFile)
+        sublime.load_settings(SETTINGS_FILE).set("glob", text)
+        sublime.save_settings(SETTINGS_FILE)
 
         self.argz["paths"] = ["".join(self.argz["path"][:-1] + [file]) for file in self.getMatchingFiles(text)]
 
@@ -337,6 +358,12 @@ class openFileOverSshCommand(sublime_plugin.WindowCommand):
 
     def run(self, **args):
 
+        #because everything happens synchronously, using the open sshShell is faster than multiplexing by a noticeable amount when opening 10+ files
+        #however, using the sshShell requires that the file must not contain a line with the seeking string
+        #while that is an unlikely occurrence, I will use multiplexing if its available when opening a single file to ensure a non-glob is always opened correctly
+
+        useShell = len(self.argz["paths"]) > 1 or len(getMultiplexingArgs()) == 0 #i.e. isMultipleFiles || isMultiplexingDisabled
+
         for path in self.argz["paths"]:
 
             #open a temp file with the correct extension
@@ -346,10 +373,11 @@ class openFileOverSshCommand(sublime_plugin.WindowCommand):
             file = tempfile.NamedTemporaryFile(suffix=ext)
             view = self.window.open_file(file.name)
 
-            viewToShell[view.id()] = self.argz["sshShell"]
+            if useShell:
+                viewToShell[view.id()] = self.argz["sshShell"]
 
             #used to set the view/buffer path which prevents the save dialog from showing up on file save
-            #It also looks nice when you right click on the file name at the top of the window
+            #it also looks nice when you right click on the file name at the top of the window
             #...well as nice as it can ;)
             view.settings().set("ssh_fake_path", self.argz["server"] + "/" + path)
             view.settings().set("ssh_server", self.argz["server"])
@@ -365,6 +393,9 @@ class openFileOverSshCommand(sublime_plugin.WindowCommand):
         self.argz = {}
         return serverInputHandler(self.argz)
 
+
+
+
 #sets the view's buffer to the remote file's contents
 class openFileOverSshTextCommand(sublime_plugin.TextCommand):
 
@@ -374,11 +405,11 @@ class openFileOverSshTextCommand(sublime_plugin.TextCommand):
 
         if self.view.id() in viewToShell:
 
-            txt = viewToShell[self.view.id()].readFile(self.view.settings().get("ssh_path")).replace(WINDOWS_LINE_ENDING, UNIX_LINE_ENDING)
+            txt = viewToShell[self.view.id()].readFile(self.view.settings().get("ssh_path"))
             del viewToShell[self.view.id()] #remove ref so the shell can close
 
         else:
-            p = subprocess.Popen(["ssh", self.view.settings().get("ssh_server"), "cat", self.view.settings().get("ssh_path")], stdout=subprocess.PIPE, startupinfo=getStartupInfo())
+            p = subprocess.Popen(["ssh", *getMultiplexingArgs(), self.view.settings().get("ssh_server"), "cat " + self.view.settings().get("ssh_path")], stdout=subprocess.PIPE, startupinfo=getStartupInfo())
             txt, _ = p.communicate()
 
         self.view.set_encoding("UTF-8")
@@ -444,7 +475,7 @@ class openFileOverSshEventListener(sublime_plugin.ViewEventListener):
         #   after the file is saved to the temp file, scp to the temp file to the remote location
         #   just like anyone would do normally when they wanted to copy a local file to a remote location
 
-        p = subprocess.Popen(['ssh', self.view.settings().get("ssh_server"), "cp /dev/stdin " + self.view.settings().get("ssh_path")], stdin=subprocess.PIPE, startupinfo=getStartupInfo()) #ssh cp stdin to remote file
+        p = subprocess.Popen(['ssh', *getMultiplexingArgs(), self.view.settings().get("ssh_server"), "cp /dev/stdin " + self.view.settings().get("ssh_path")], stdin=subprocess.PIPE, startupinfo=getStartupInfo()) #ssh cp stdin to remote file
         p.communicate(self.view.substr(sublime.Region(0, self.view.size())).encode("UTF-8")) #set stdin to the buffer contents
 
         #The Windows Python temporary files cannot be opened by another process before close() (see tempfile.NamedTemporaryFile docs)
