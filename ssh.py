@@ -1,7 +1,8 @@
 import os
-import sublime
+import shlex
 import string
 import random
+import sublime
 import tempfile
 import subprocess
 import sublime_plugin
@@ -91,9 +92,7 @@ class SshShell():
 
     def readFile(self, filePath):
 
-        if filePath[0] not in ["/", "~"]: #path needs to be absolute because the current directory can be anywhere
-            filePath = "~/" + filePath
-
+        filePath = ("~/" if filePath[0] != "/" else "") + shlex.quote(filePath) #if filePath doesn't start with a /, then its assumed filePath is relative to ~, because the current directory can be anywhere
         filePath = filePath.encode()
         seekingString = self.getSeekingString()
         self.shell.stdin.write(b"cat " + filePath + b"; echo -e '\\n" + seekingString + b"'\n") #need the \n so seeking string is on its own line
@@ -192,95 +191,7 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 
         return pathInputHandler(self.argz)
 
-#inputer pallet path input
-class pathInputHandler(sublime_plugin.ListInputHandler):
-
-    def __init__(self, argz, oldPath = None):
-
-        super().__init__()
-
-        if not "path" in argz:
-            argz["path"] = []
-
-        if oldPath == None:
-            oldPath = sublime.load_settings(SETTINGS_FILE).get("path", []) #load once here because confirm overwrites all the paths
-
-        self.argz = argz
-        self.ssh = argz["sshShell"]
-        self.oldPath = oldPath
-
-    @staticmethod
-    def isFolder(value):
-
-        return value.endswith("/")
-
-    @staticmethod
-    def isGlob(value):
-
-        return value == "*"
-
-    #ls, glob, and initial selection
-    def list_items(self):
-
-        files = self.ssh.runCmd("/bin/ls -1Lp")
-
-        for file in files:
-            if not self.isFolder(file):
-                files.append("*")
-                break
-
-        try:
-            files = (files, files.index(self.oldPath[len(self.argz["path"])])) #default selection
-        except (ValueError, IndexError):
-            pass
-
-        return files
-
-    #gray placeholder text
-    def placeholder(self):
-
-        return "file"
-
-    #folder, file, or glob
-    def preview(self, value):
-
-        if self.isFolder(value):
-            return "Enter Folder"
-        elif self.isGlob(value):
-            return "Input Glob"
-        else:
-            return "Open File"
-
-    #save value
-    def confirm(self, value):
-
-        self.argz["path"].append(value)
-
-        sublime.load_settings(SETTINGS_FILE).set("path", self.argz["path"])
-        sublime.save_settings(SETTINGS_FILE)
-
-        if self.isFolder(value):
-            self.ssh.runCmd("cd " + value)
-        elif not self.isGlob(value):
-            self.argz["paths"] = ["".join(self.argz["path"])]
-
-    #cd ..
-    def cancel(self):
-
-        if len(self.argz["path"]) > 0 and not self.isGlob(self.argz["path"].pop()):
-            self.ssh.runCmd("cd ..")
-
-    #continue if folder or glob
-    def next_input(self, args):
-
-        if self.isFolder(args["path"]):
-            return pathInputHandler(self.argz, self.oldPath)
-        if self.isGlob(args["path"]):
-            return globInputHandler(self.argz)
-        return None
-
-
-#input pallet glob input
+#input pallet action glob input
 class globInputHandler(sublime_plugin.TextInputHandler):
 
     def __init__(self, argz):
@@ -302,7 +213,8 @@ class globInputHandler(sublime_plugin.TextInputHandler):
         return len(glob) > 0 #must be at least one pattern
 
     def getMatchingFiles(self, text):
-        return self.ssh.runCmd("/bin/ls -1Lpd {} 2> /dev/null | egrep -v /$".format(text)) #ignore ls's error when nothing is found
+
+        return self.ssh.runCmd(f"/bin/ls -1Lpd {text} | egrep -v /$")
 
     #gray placeholder text
     def placeholder(self):
@@ -322,7 +234,7 @@ class globInputHandler(sublime_plugin.TextInputHandler):
 
         return "syntax valid"
 
-    #check files
+    #check matches
     def validate(self, text):
 
         if self.isSyntaxOk(text):
@@ -334,10 +246,12 @@ class globInputHandler(sublime_plugin.TextInputHandler):
 
         return False
 
-    #save value
+    #update values
     def confirm(self, text):
 
-        sublime.load_settings(SETTINGS_FILE).set("glob", text)
+        settings = sublime.load_settings(SETTINGS_FILE)
+        settings.set("path", self.argz["path"])
+        settings.set("glob", text)
         sublime.save_settings(SETTINGS_FILE)
 
         self.argz["paths"] = ["".join(self.argz["path"][:-1] + [file]) for file in self.getMatchingFiles(text)]
@@ -347,8 +261,235 @@ class globInputHandler(sublime_plugin.TextInputHandler):
 
         self.argz["path"].pop() #pop off the * that got us here
 
-    #file selection
+    #all done
     def next_input(self, args):
+
+        return None
+
+#input pallet action new file input
+class newInputHandler(sublime_plugin.TextInputHandler):
+
+    def __init__(self, argz):
+
+        super().__init__()
+
+        self.argz = argz
+        self.ssh = argz["sshShell"]
+
+    @staticmethod
+    def splitPath(text): #returns (path, file, folders)
+
+        if len(text) == 0:
+            return (None, None, None)
+
+        path = text.split("/")
+        file = path[-1]
+
+        if "" in path[:-1]: #disallow multiple or initial slashes
+            return (None, file, None)
+
+        folders = "/".join(path[:-1])
+        if len(folders) > 0:
+            folders += "/"
+
+        return (path, file, folders)
+
+    def fileExists(self, text):
+
+        return len(self.ssh.runCmd("/bin/ls -d " + shlex.quote(text))) > 0
+
+    #gray placeholder text
+    def placeholder(self):
+
+        return "newFolder/newFile.txt"
+
+    #path check
+    def preview(self, text):
+
+        path, file, folders = self.splitPath(text)
+        if path == None:
+            return None if file == None else "Invalid Path"
+
+        #New File {} in New Folder(s) {}
+        text = ""
+        if len(file) > 0:
+            text = f"New File {{{file}}}" + (" in " if len(folders) > 0 else "")
+        if len(folders) > 0:
+            text += f"New Folder{'s' if len(path) > 2 else ''} {{{folders}}}"
+
+        return text
+
+    #check new file/folder
+    def validate(self, text):
+
+        path = self.splitPath(text)[0]
+        if path != None:
+
+            if not self.fileExists(path[0]):
+                return True
+
+            #It technically doesn't matter if the file/folder already exists cause it'll get opened correctly; but since the user is expecting to make a new file/folder I'll let them know.
+            sublime.error_message(f"The file/folder '{path[0]}' already exists.")
+
+        return False
+
+    #update values
+    def confirm(self, text):
+
+        #Because we create the new folder in this function, that makes re-editing this input handler difficult
+        #which means that bringing the user into the newly created folder doesn't work because the user might try to go back up the input handler stack
+        #So instead of dealing with that, I'll just pop this handler off the stack and let the user select the new folders themselves
+        #I will however set the previous selections (in the settings file) to the new folders so at least they'll be the defaults
+
+        path, file, folders = self.splitPath(text)
+
+        self.argz["path"].pop() #remove the new file that got us here
+
+        #make the folders
+        if len(folders) > 0:
+            self.ssh.runCmd("mkdir -p " + shlex.quote(folders))
+            self.argz["path"].extend([folder + "/" for folder in path[:-1]]) #add the new folders to the path
+
+        #open the file
+        if len(file) > 0:
+            self.argz["path"].append(pathInputHandler.actions.new) #make it look like the user selected new in the new (or old) folder(s)
+            self.argz["paths"] = ["".join(self.argz["path"][:-1]) + file]
+            sublime.load_settings(SETTINGS_FILE).set("path", self.argz["path"])
+        else:
+            sublime.load_settings(SETTINGS_FILE).set("path", self.argz["path"]) #set the previous selection(s) to the new folders
+            for i in range(len(path[:-1])): #remove the new folders in the current path
+                self.argz["path"].pop()
+
+        sublime.save_settings(SETTINGS_FILE)
+
+    #pop()
+    def cancel(self):
+
+        self.argz["path"].pop() #pop off the New File that got us here
+
+    #all done
+    def next_input(self, args):
+
+        file = self.splitPath(args["new"])[1]
+
+        return None if len(file) > 0 else sublime_plugin.BackInputHandler()
+
+#input pallet path input
+class pathInputHandler(sublime_plugin.ListInputHandler):
+
+    fileKind = (sublime.KindId.COLOR_YELLOWISH, "f", "")
+    folderKind = (sublime.KindId.COLOR_CYANISH, "F", "")
+    actionKind = (sublime.KindId.COLOR_PURPLISH, "-", "")
+
+    #ListInputItem value must be a sublime.Value so this class helps store InputHandlers in the ListInputItem
+    class actions:
+
+        glob = 1
+        new = 2
+
+        info = {
+            glob: {"preview": "Open Multiple Files with a Glob", "handler": globInputHandler},
+            new: {"preview": "Make a New File or Folder Here", "handler": newInputHandler}
+        }
+
+
+    def __init__(self, argz):
+
+        super().__init__()
+
+        if not "path" in argz:
+            argz["path"] = []
+
+        self.argz = argz
+        self.ssh = argz["sshShell"]
+        self.settings = sublime.load_settings(SETTINGS_FILE)
+
+    @staticmethod
+    def isPath(value):
+        return isinstance(value, str)
+
+    @staticmethod
+    def isFolder(strValue):
+        return strValue.endswith("/")
+
+    #ls, actions, and initial selection
+    def list_items(self):
+
+        files = self.ssh.runCmd("/bin/ls -1Lp")
+        hasAFile = False
+
+        for i, file in enumerate(files):
+
+            isFolder = self.isFolder(file)
+            files[i] = sublime.ListInputItem(file, file, annotation="->" if isFolder else "", kind=self.folderKind if isFolder else self.fileKind)
+            if not isFolder:
+                hasAFile = True
+
+        if hasAFile:
+            files.append(sublime.ListInputItem("*", self.actions.glob, annotation="Pattern", kind=self.actionKind))
+
+        files.append(sublime.ListInputItem("New", self.actions.new, annotation="Create", kind=self.actionKind))
+
+
+        try:
+            files = (files, next(i for i,f in enumerate(files) if f.value == self.settings.get("path", [])[len(self.argz["path"])])) #default selection
+        except (StopIteration, IndexError): #StopIteration if no value from the generator, IndexError if the settings path isn't long enough
+            pass
+
+
+        return files
+
+    #gray placeholder text
+    def placeholder(self):
+
+        return "file"
+
+    #folder, file, or action
+    def preview(self, value):
+
+        if value == None:
+            return "No matches found. You can use the New action to create a file."
+        if not self.isPath(value):
+            return self.actions.info[value]["preview"]
+        elif self.isFolder(value):
+            return "Enter Folder"
+        else:
+            return "Open File"
+
+    #update values
+    def confirm(self, value):
+
+        self.argz["path"].append(value)
+
+        if not self.isPath(value):
+            pass
+        elif self.isFolder(value):
+            self.ssh.runCmd("cd " + shlex.quote(value))
+        else:
+            #save path when done as opposed to as we go because this how sublime does it with internal commands
+            self.settings.set("path", self.argz["path"])
+            sublime.save_settings(SETTINGS_FILE)
+            self.argz["paths"] = ["".join(self.argz["path"])]
+
+    #cd ..
+    def cancel(self):
+
+        try:
+            path = self.argz["path"].pop()
+            if self.isPath(path) and self.isFolder(path):
+                self.ssh.runCmd("cd ..")
+        except IndexError: #Nothing to pop
+            pass
+
+    #continue if folder or action
+    def next_input(self, args):
+
+        value = args["path"]
+
+        if not self.isPath(value):
+            return self.actions.info[value]["handler"](self.argz)
+        if self.isFolder(value):
+            return pathInputHandler(self.argz)
 
         return None
 
@@ -382,7 +523,7 @@ class openFileOverSshCommand(sublime_plugin.WindowCommand):
             view.settings().set("ssh_fake_path", self.argz["server"] + "/" + path)
             view.settings().set("ssh_server", self.argz["server"])
             view.settings().set("ssh_path", path)
-            view.set_status("ssh_true", "Saving to " + self.argz["server"] + path)
+            view.set_status("ssh_true", "Saving to " + self.argz["server"] + ":" + path)
 
             file.close()
 
@@ -409,7 +550,7 @@ class openFileOverSshTextCommand(sublime_plugin.TextCommand):
             del viewToShell[self.view.id()] #remove ref so the shell can close
 
         else:
-            p = subprocess.Popen(["ssh", *getMultiplexingArgs(), self.view.settings().get("ssh_server"), "cat " + self.view.settings().get("ssh_path")], stdout=subprocess.PIPE, startupinfo=getStartupInfo())
+            p = subprocess.Popen(["ssh", *getMultiplexingArgs(), self.view.settings().get("ssh_server"), "cat " + shlex.quote(self.view.settings().get('ssh_path'))], stdout=subprocess.PIPE, startupinfo=getStartupInfo())
             txt, _ = p.communicate()
 
         self.view.set_encoding("UTF-8")
@@ -475,7 +616,7 @@ class openFileOverSshEventListener(sublime_plugin.ViewEventListener):
         #   after the file is saved to the temp file, scp to the temp file to the remote location
         #   just like anyone would do normally when they wanted to copy a local file to a remote location
 
-        p = subprocess.Popen(['ssh', *getMultiplexingArgs(), self.view.settings().get("ssh_server"), "cp /dev/stdin " + self.view.settings().get("ssh_path")], stdin=subprocess.PIPE, startupinfo=getStartupInfo()) #ssh cp stdin to remote file
+        p = subprocess.Popen(["ssh", *getMultiplexingArgs(), self.view.settings().get("ssh_server"), "cp /dev/stdin " + shlex.quote(self.view.settings().get('ssh_path'))], stdin=subprocess.PIPE, startupinfo=getStartupInfo()) #ssh cp stdin to remote file
         p.communicate(self.view.substr(sublime.Region(0, self.view.size())).encode("UTF-8")) #set stdin to the buffer contents
 
         #The Windows Python temporary files cannot be opened by another process before close() (see tempfile.NamedTemporaryFile docs)

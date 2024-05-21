@@ -13,10 +13,13 @@ Trigger the remote file selection using one of these options.
 
 Once triggered, input the server path and browse/open remote files as follows.
 1. Type in the scp-like path to your server (`user@server.ext:`), and press enter
-2. Once the server is validated and connected, a list input will appear which allows you to choose a folder or a file
+2. Once the server is validated and connected, a list input will appear which allows you to choose a folder or file
 3. Continue browsing the file system on your server until you find the file you want to open
-4. Or select the star (\*) option to enter a pattern like `\*.c \*.h`
-5. Enjoy finally being able to edit a remote file in sublime (2505 students amirite)
+4. Enjoy finally being able to edit a remote file in sublime (2505 students amirite)
+
+The list input also contains various actions related to opening files.
+* Select the star (\*) option to enter a pattern like `*.c *.h`
+* Select the _New_ option to create new folders and open new files
 
 ## How it Works
 When a remote file is opened, the contents of the file is copied into the buffer.<br>
