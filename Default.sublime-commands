@@ -1,6 +1,17 @@
 [
-  {
-    "caption": "Open File Over SSH",
-    "command": "open_file_over_ssh"
-  }
+	//Open
+	{
+		"caption": "Open File Over SSH",
+		"command": "open_file_over_ssh"
+	},
+
+	//Settings
+	{
+		"caption": "Preferences: Open File Over SSH Settings",
+		"command": "edit_settings",
+		"args": {
+			"base_file": "${packages}/SublimeOpenFileOverSSH/SublimeOpenFileOverSSH.sublime-settings",
+			"default": "//See the left pane for a list of settings and values\n{\n\t$0\n}\n"
+		}
+	}
 ]

@@ -1,0 +1,25 @@
+//Open File Over SSH - Default Settings
+//The python code has internal default values for all of these, so this file is just to document and list available settings.
+{
+	//Preferences --------------------------------------------------
+
+	/*
+	 * SSH Multiplexing:
+	 *  speeds up connection and authentication when browsing and saving files in short succession.
+	 * Accepts keep alive (ControlPersist) times in the 120s or 5m formats.
+	 * Set to false to disable multiplexing.
+	*/
+	//"multiplexing": "5m"
+
+
+
+	//Internal Storage --------------------------------------------------
+	//This section contains values set and used internally by the plugin.
+
+	/*
+	 * Command Pallet Inputs: used to provide default selections based on recently selected files.
+	*/
+	//"server": "" //The last connected server
+	//"path": [] //The last selected path
+	//"glob": "" //The last used glob
+}

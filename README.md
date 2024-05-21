@@ -34,9 +34,14 @@ The only commands used by this plugin are `ssh` on the local machine and `ls`, `
 You will need to setup ssh public/private key login to your remote machine so this plugin can connect to your server in the background without needing a password.<br>
 
 ## Settings
+Open the settings file with one of these options.
+* Use the menu item _Preferences > Package Settings > Open File Over SSH > Settings_
+* Run the command pallet command _Preferences: Open File Over SSH Settings_
+* Open the file _Packages > User > SublimeOpenFileOverSSH.sublime-settings_
+
+#### Multiplexing
 Ssh's multiplexing feature is used to speed up connection and authentication when browsing and saving files in short succession.<br>
-The default connection keep alive time is 5 minutes and you can change this by adding the `multiplexing` key in the .sublime-settings file for this package.<br>
-The .sublime-settings file will be created inside of the User folder in the Sublime Packages folder after you connect to your first server.<br>
+The default connection keep alive time is 5 minutes and you can change this with the `multiplexing` setting.<br>
 The `multiplexing` key accepts keep alive (ControlPersist) times in the `120s` or `5m` formats.<br>
 If your system doesn't support multiplexing or you'd like to disable it for security reasons, set `multiplexing` to `false`.
 

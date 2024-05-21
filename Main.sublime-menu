@@ -1,4 +1,5 @@
 [
+	//Open via SSH
 	{
 		"id": "file",
 		"children":
@@ -11,6 +12,34 @@
 					"overlay": "command_palette",
 					"command": "open_file_over_ssh"
 				}
+			}
+		]
+	},
+
+	//Settings
+	{
+		"id": "preferences",
+		"children":
+		[
+			{
+				"id": "package-settings",
+				"caption": "Package Settings", //In case Package Control is not installed
+				"children":
+				[
+					{
+						"caption": "Open File Over SSH",
+						"children": [
+							{
+								"caption": "Settings",
+								"command": "edit_settings",
+								"args": {
+									"base_file": "${packages}/SublimeOpenFileOverSSH/SublimeOpenFileOverSSH.sublime-settings",
+									"default": "//See the left pane for a list of settings and values\n{\n\t$0\n}\n"
+								}
+							},
+						]
+					}
+				]
 			}
 		]
 	}
