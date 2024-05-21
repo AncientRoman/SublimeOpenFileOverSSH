@@ -1,6 +1,6 @@
 [
   {
-    "caption": "ssh: Open File Over SSH",
+    "caption": "Open File Over SSH",
     "command": "open_file_over_ssh"
   }
 ]

@@ -1,11 +1,28 @@
-import os
-import shlex
-import string
-import random
+import os #temp file removal
+import shlex #shell arg escaping
+import string #random string creation
+import random #random string creation
 import sublime
 import tempfile
-import subprocess
+import subprocess #popen
 import sublime_plugin
+
+"""
+ * Hey there!
+ * Welcome to my plugin.
+ * This file contains all of the python code for both the view handlers and input pallet command handlers.
+ * Here's how I recommend reading/learning this code.
+ *
+ * The bottom of this file contains the ViewEventListener and TextCommand which is where the magic happens.
+ * I'd start there.
+ * The ViewEventListener handles saving and modifying the view while the TextCommand handles loading the view's contents.
+ *
+ * The middle of this file has the Input Pallet stuff which is best read starting with the serverInputHandler and then the pathInputHandler.
+ * The other InputHandlers are for the extra actions (glob and new).
+ *
+ * The top of this file includes ssh and popen args including the multiplexing information.
+ * The custom SshShell class below those functions handles the Input Pallet's persistent ssh connection.
+"""
 
 
 SETTINGS_FILE = "SublimeOpenFileOverSSH.sublime-settings"
@@ -135,7 +152,7 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
     @staticmethod
     def isSyntaxOk(text):
 
-        return "@" in text and ":" in text
+        return "@" in text and text[-1] == ":"
 
     #gray placeholder text
     def placeholder(self):
@@ -151,9 +168,9 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
     def preview(self, text):
 
         if not self.isSyntaxOk(text):
-            return "invalid syntax"
+            return "Invalid Server Syntax"
 
-        return "syntax valid"
+        return "Server Input Valid"
 
     #check server
     def validate(self, text):
@@ -230,9 +247,9 @@ class globInputHandler(sublime_plugin.TextInputHandler):
     def preview(self, text):
 
         if not self.isSyntaxOk(text):
-            return "invalid syntax"
+            return "Invalid Glob Syntax"
 
-        return "syntax valid"
+        return "Glob Input Valid"
 
     #check matches
     def validate(self, text):
@@ -336,9 +353,9 @@ class newInputHandler(sublime_plugin.TextInputHandler):
     #update values
     def confirm(self, text):
 
-        #Because we create the new folder in this function, that makes re-editing this input handler difficult
-        #which means that bringing the user into the newly created folder doesn't work because the user might try to go back up the input handler stack
-        #So instead of dealing with that, I'll just pop this handler off the stack and let the user select the new folders themselves
+        #because we create the new folder in this function, that makes re-editing this input handler difficult
+        #    which means that bringing the user into the newly created folder doesn't work because the user might try to go back up the input handler stack
+        #so instead of dealing with that, I'll just pop this handler off the stack and let the user select the new folders themselves
         #I will however set the previous selections (in the settings file) to the new folders so at least they'll be the defaults
 
         path, file, folders = self.splitPath(text)
@@ -585,7 +602,7 @@ class openFileOverSshEventListener(sublime_plugin.ViewEventListener):
         #But but, the name has to be different each time set_name() is called
         #Idk man, its weird
         self.viewName = not self.viewName
-        self.view.set_name(str(self.viewName)) #Sets the name so retarget() will behave (see above)
+        self.view.set_name(str(self.viewName)) #sets the name so retarget() will behave (see above)
         self.view.retarget(self.view.settings().get("ssh_fake_path")) #sets the view/buffer path so the file name looks nice
         self.view.set_reference_document(self.diffRef) #set the diff ref to the saved original file (otherwise the diffs are all messed up)
         self.view.set_scratch(True) #on_mod sets this to false
@@ -604,9 +621,9 @@ class openFileOverSshEventListener(sublime_plugin.ViewEventListener):
 
     def on_pre_save(self):
 
-        #this gets called after the save dialog has exited when this file is not view.retarget() (see openFileOverSshCommand.run)
+        #this gets called after the save dialog has exited when this file is not view.retarget()'ed (see openFileOverSshCommand.run() and doHacks())
 
-        #two ways I could write changes to remote file
+        #two ways I could write changes to the remote file
         #
         #1. (what I am currently doing), uses pre_save
         #   use ssh and copy stdin to the remote file i.e. erase remote file with stdin
@@ -616,7 +633,7 @@ class openFileOverSshEventListener(sublime_plugin.ViewEventListener):
         #   after the file is saved to the temp file, scp to the temp file to the remote location
         #   just like anyone would do normally when they wanted to copy a local file to a remote location
 
-        p = subprocess.Popen(["ssh", *getMultiplexingArgs(), self.view.settings().get("ssh_server"), "cp /dev/stdin " + shlex.quote(self.view.settings().get('ssh_path'))], stdin=subprocess.PIPE, startupinfo=getStartupInfo()) #ssh cp stdin to remote file
+        p = subprocess.Popen(["ssh", *getMultiplexingArgs(), self.view.settings().get("ssh_server"), "cat > " + shlex.quote(self.view.settings().get('ssh_path'))], stdin=subprocess.PIPE, startupinfo=getStartupInfo()) #ssh cp stdin to remote file
         p.communicate(self.view.substr(sublime.Region(0, self.view.size())).encode("UTF-8")) #set stdin to the buffer contents
 
         #The Windows Python temporary files cannot be opened by another process before close() (see tempfile.NamedTemporaryFile docs)
