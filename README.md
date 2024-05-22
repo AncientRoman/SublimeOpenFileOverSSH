@@ -7,9 +7,9 @@ This plugin should work on MacOS, Linux, and Windows.
 
 ## Usage
 Trigger the remote file selection using one of these options.
-* Press _cmd-shift-o_ or _wndws-shift-o_
 * Use the _File > Open via SSH_ menu item
 * Run the _Open File Over SSH_ command from the command palette
+* Press _cmd-shift-o_ or _wndws-shift-o_ (you must set this up, see [Key Bindings](#key-bindings))
 
 Once triggered, input the server path and browse/open remote files as follows.
 1. Type in the scp-like path to your server (`user@server.ext:`), and press enter
@@ -45,6 +45,9 @@ The default connection keep alive time is 5 minutes and you can change this with
 The `multiplexing` key accepts keep alive (ControlPersist) times in the `120s` or `5m` formats.<br>
 If your system doesn't support multiplexing or you'd like to disable it for security reasons, set `multiplexing` to `false`.
 
+### Key Bindings
+Key Bindings are disabled by default per Package Control requirements.<br>
+Enable the Open via SSH key binding by opening the key binding file in a similar manner as the settings file and copying over the disabled binding.
 
 ## What's New?
 v1.3: Support for Sublime Text 4<br>
