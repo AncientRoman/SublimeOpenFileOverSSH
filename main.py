@@ -608,16 +608,25 @@ class openFileOverSshEventListener(sublime_plugin.ViewEventListener):
         self.view.set_scratch(True) #on_mod sets this to false
 
 
-    def on_load(self):
+    def on_load(self, setDiffRef=True):
 
         self.view.run_command("open_file_over_ssh_text") #open dat remote file
 
         self.view.sel().clear() #erase selections (the whole view will be selected, idk why)
         self.view.sel().add(sublime.Region(0, 0)) #put cursor on first line (default sublime behavior when a normal file is opened)
 
-        self.diffRef = self.view.substr(sublime.Region(0, self.view.size())) #save the contents of the buffer in order to mimic sublime's incremental diff on a normal file
+        if setDiffRef:
+            self.diffRef = self.view.substr(sublime.Region(0, self.view.size())) #save the contents of the buffer in order to mimic sublime's incremental diff on a normal file
 
         self.doHacks()
+
+    def on_revert(self):
+
+        #this handles the revert command run from the command pallet
+        #its not perfect because on_mod is called right after on_revert finishes so the buffer will look dirty
+        #the previous selections are also gone by the time on_revert gets called so I can't save them
+
+        self.on_load(False)
 
     def on_pre_save(self):
 
