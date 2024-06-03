@@ -4,8 +4,10 @@ import string #random string creation
 import random #random string creation
 import sublime
 import tempfile
+import threading #stderr consuming
 import subprocess #popen
 import sublime_plugin
+from functools import singledispatch
 
 """
  * Hey there!
@@ -43,38 +45,94 @@ def getStartupInfo():
 
     return startupinfo
 
-#gets the appropriate multiplexing args for ssh from the settings file
-def getMultiplexingArgs():
+#gets the appropriate ssh args using the settings file
+def getSshArgs():
 
     settings = sublime.load_settings(SETTINGS_FILE)
-    persist = "5m"
 
-    if settings.has("multiplexing"):
+    args = ["-T"] #Non-interactive mode. While non-interactive will be the default, we'll get a unable to allocate tty error message without this
 
-        persist = settings["multiplexing"]
-        if persist in [None, False, 0, "0"]:
-            return []
+    if not settings.get("useOpenSshConfigArgs", True):
+        return args
+
+    #no user input
+    args.extend(["-o", "BatchMode=yes"]) #Batch mode is StrictHostKeyChecking=yes (as opposed to ask) and PreferredAuthentications=publickey, i.e. no user input
+
+    #timeout
+    timeout = settings.get("timeout", 7)
+    if timeout != None:
+        if not (isinstance(timeout, int) or isinstance(timeout, str) and timeout.isdecimal()):
+            print(f"SublimeOpenFileOverSSH: Unrecognized timeout setting ({timeout}), falling back to default")
+            timeout = 7
+        args.extend(["-o", f"ConnectTimeout={timeout}"]) #not specifying this uses system tcp timeout
+
+    #multiplexing
+    persist = settings.get("multiplexing", "5m")
+    if persist not in [None, False, 0, "0"]:
+
         if isinstance(persist, bool) and persist: #True == 1 so must check if its a bool
             persist = "5m"
-        elif not (isinstance(persist, int) or isinstance(persist, str) and (persist.isdecimal() or persist[-1] in ["m", "s"] and persist[:-1].isdecimal())):
+        if not (isinstance(persist, int) or isinstance(persist, str) and (persist.isdecimal() or persist[-1] in ["m", "s"] and persist[:-1].isdecimal())):
             print(f"SublimeOpenFileOverSSH: Unrecognized multiplexing setting ({persist}), falling back to default")
             persist = "5m"
 
-    #Using %C to both escape special characters and obfuscate the connection details
-    #Auto creates a new master socket if it doesn't exist
-    return ["-o", "ControlPath=~/.ssh/SOFOS_cm-%C", "-o", "ControlMaster=auto", "-o", f"ControlPersist={persist}"]
+        #Using %C to both escape special characters and obfuscate the connection details
+        #Auto creates a new master socket if it doesn't exist
+        args.extend(["-o", "ControlPath=~/.ssh/SOFOS_cm-%C", "-o", "ControlMaster=auto", "-o", f"ControlPersist={persist}"])
+
+    return args
+
+#makes an error string for an ssh error. Uses the new single-dispatch (overload) functions to accept string or bytes
+@singledispatch
+def makeErrorText(sshStderr, sshRetCode, title):
+
+    error = sshStderr.replace("\r", "").rstrip("\n") #ssh's output to stderr has line endings of CRLF per ssh specs. Remove trailing new line too
+    errType = 'ssh' if sshRetCode == 255 else 'remote'
+
+    if error:
+        msg = f"{title}.\n\nCode: {sshRetCode} ({errType})\nError: {error}"
+        if "host key verification failed" in error.lower():
+            msg += "\n\nSSH to this server with your terminal to verify the host key."
+        if "permission denied" in error.lower():
+            msg += "\n\nYou must setup ssh public key authentication with this server for this plugin to work."
+        if "timed out" in error.lower():
+            msg += "\n\nThe timeout time can be changed in this plugin's settings if needed."
+        return msg
+    else:
+        return f"{title}.\nAn unknown {errType} error occurred.\nError Code: {sshRetCode}"
+
+@makeErrorText.register(bytes)
+@makeErrorText.register(bytearray)
+def _(sshStderr, sshRetCode, title):
+    return makeErrorText(sshStderr.decode(), sshRetCode, title)
 
 
 
 
 #handles the input pallet's ssh shell
 class SshShell():
+    """
+     * all methods of this class including the constructor are blocking accept for isAlive()
+     * after the constructor returns, ssh has either errored or is connected to remote and ready to receive commands
+    """
 
     seekingString = b"A random string for seeking"
 
     def __init__(self, userAndServer):
 
-        self.shell = subprocess.Popen(["ssh", *getMultiplexingArgs(), userAndServer], stdin=subprocess.PIPE, stdout=subprocess.PIPE, startupinfo=getStartupInfo())
+        self.shell = subprocess.Popen(["ssh", *getSshArgs(), userAndServer], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=getStartupInfo())
+        self.runCmd() #read past all login information i.e. prepare for commands; will block until completed or error
+
+        if self.isAlive():
+            self.thread = threading.Thread(target=self.shell.stderr.read, daemon=True) #consume sterr so a full pipe doesn't block our process
+            self.thread.start()
+            self.error = None
+        else:
+            self.error = self.shell.stderr.read().decode().replace("\r", "").rstrip("\n") #ssh's output to stderr has line endings of CRLF per ssh specs. Remove trailing new line too
+
+    @property
+    def retCode(self):
+        return self.shell.returncode
 
     @staticmethod
     def trimNewLine(str):
@@ -101,7 +159,11 @@ class SshShell():
 
         while True:
 
-            lines.append(self.trimNewLine(self.shell.stdout.readline()))
+            line = self.shell.stdout.readline()
+            if len(line) == 0: #EOF
+                break
+
+            lines.append(self.trimNewLine(line))
             if lines[-1] == seekingString:
                 break;
 
@@ -119,7 +181,15 @@ class SshShell():
 
         while True:
 
-            lines.append(self.shell.stdout.readline())
+            line = self.shell.stdout.readline()
+            if len(line) == 0: #EOF i.e. error
+                #need three lines to always make it past the return slicing
+                lines.insert(0, b"\n")
+                lines.insert(0, b"Warning: an error occurred while reading this file (" + filePath + b") from the remote server.\nThis file may be wrong or incomplete.\nDO NOT SAVE THIS FILE unless you are sure it's correct and complete.\nYou may reopen this file to ensure correctness with the `File:Revert` command from the command pallet\n\n")
+                lines.insert(0, b"\n")
+                break
+
+            lines.append(line)
             if lines[-1][:-1] == seekingString:
                 break;
 
@@ -135,9 +205,16 @@ class SshShell():
             self.shell.wait()
             print("SublimeOpenFileOverSSH: ssh finished with return code %d" % self.shell.returncode)
 
+        try:
+            self.thread.join() #join thread to free up resources
+            print("SublimeOpenFileOverSSH: ssh thread done")
+        except AttributeError:
+            print("SublimeOpenFileOverSSH: no ssh thread cleanup needed")
+
     def __del__(self):
 
         self.close()
+
 
 #input pallet server input
 class serverInputHandler(sublime_plugin.TextInputHandler):
@@ -177,12 +254,14 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 
         if self.isSyntaxOk(text):
 
-            self.ssh = SshShell(text[:-1])
+            server = text[:-1]
+            self.ssh = SshShell(server)
 
             if self.ssh.isAlive(): #check if not dead
                 return True
 
-            sublime.error_message("The specified server, {}, was not found".format(text)) #the dialog looks ugly, but I can't think of a better way
+            #the dialog looks kinda ugly, but I can't think of a better way
+            sublime.error_message(makeErrorText(self.ssh.error, self.ssh.retCode, f"Could not connect to {server}"))
 
         return False
 
@@ -191,8 +270,6 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 
         sublime.load_settings(SETTINGS_FILE).set("server", text)
         sublime.save_settings(SETTINGS_FILE)
-
-        self.ssh.runCmd() #get ssh shell ready for commands
 
         self.argz["server"] = text[:-1]
         self.argz["sshShell"] = self.ssh
@@ -520,7 +597,7 @@ class openFileOverSshCommand(sublime_plugin.WindowCommand):
         #however, using the sshShell requires that the file must not contain a line with the seeking string
         #while that is an unlikely occurrence, I will use multiplexing if its available when opening a single file to ensure a non-glob is always opened correctly
 
-        useShell = len(self.argz["paths"]) > 1 or len(getMultiplexingArgs()) == 0 #i.e. isMultipleFiles || isMultiplexingDisabled
+        useShell = len(self.argz["paths"]) > 1 or "ControlMaster=auto" not in getSshArgs() #i.e. isMultipleFiles || isMultiplexingDisabled
 
         for path in self.argz["paths"]:
 
@@ -554,6 +631,11 @@ class openFileOverSshCommand(sublime_plugin.WindowCommand):
 
 
 
+class sofosCheekyMakeDirtyCommand(sublime_plugin.TextCommand):
+    def run(self, edit):
+        self.view.insert(edit, 0, " ")
+        self.view.erase(edit, sublime.Region(0, 1))
+
 #sets the view's buffer to the remote file's contents
 class openFileOverSshTextCommand(sublime_plugin.TextCommand):
 
@@ -567,8 +649,13 @@ class openFileOverSshTextCommand(sublime_plugin.TextCommand):
             del viewToShell[self.view.id()] #remove ref so the shell can close
 
         else:
-            p = subprocess.Popen(["ssh", *getMultiplexingArgs(), self.view.settings().get("ssh_server"), "cat " + shlex.quote(self.view.settings().get('ssh_path'))], stdout=subprocess.PIPE, startupinfo=getStartupInfo())
-            txt, _ = p.communicate()
+            p = subprocess.Popen(["ssh", *getSshArgs(), self.view.settings().get("ssh_server"), "cat " + shlex.quote(self.view.settings().get("ssh_path"))], stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=getStartupInfo())
+            txt, err = p.communicate()
+
+            if p.returncode != 0 and not (p.returncode == 1 and "No such file or directory" in error): #ok to open a non existent file
+                path = f"{self.view.settings().get('ssh_server')}:{self.view.settings().get('ssh_path')}"
+                txt = (makeErrorText(err, p.returncode, f"Unable to open this remote file ({path})") + "\n\nDO NOT SAVE THIS FILE because the remote file contents may be destroyed.\nOnce you fix the problem, run the `File:Revert` command from the command pallet to reopen this file.").encode()
+                sublime.error_message(makeErrorText(err, p.returncode, f"Unable to open remote file {path}"))
 
         self.view.set_encoding("UTF-8")
         self.view.replace(edit, sublime.Region(0, self.view.size()), str(txt, "UTF-8", "ignore"))
@@ -581,6 +668,7 @@ class openFileOverSshEventListener(sublime_plugin.ViewEventListener):
         self.view = view
         self.diffRef = ""
         self.viewName = True #name has to change each time its set
+        self.dirtyWhenDoHacks = False #used to not set_scratch(True) on failed save
 
     @classmethod
     def is_applicable(cls, settings):
@@ -605,7 +693,11 @@ class openFileOverSshEventListener(sublime_plugin.ViewEventListener):
         self.view.set_name(str(self.viewName)) #sets the name so retarget() will behave (see above)
         self.view.retarget(self.view.settings().get("ssh_fake_path")) #sets the view/buffer path so the file name looks nice
         self.view.set_reference_document(self.diffRef) #set the diff ref to the saved original file (otherwise the diffs are all messed up)
-        self.view.set_scratch(True) #on_mod sets this to false
+        if not self.dirtyWhenDoHacks:
+            self.view.set_scratch(True) #on_mod sets this to false
+        else:
+            self.view.run_command("sofos_cheeky_make_dirty") #after a save the view will not be dirty so fix that
+            self.dirtyWhenDoHacks = False
 
 
     def on_load(self, setDiffRef=True):
@@ -642,8 +734,12 @@ class openFileOverSshEventListener(sublime_plugin.ViewEventListener):
         #   after the file is saved to the temp file, scp to the temp file to the remote location
         #   just like anyone would do normally when they wanted to copy a local file to a remote location
 
-        p = subprocess.Popen(["ssh", *getMultiplexingArgs(), self.view.settings().get("ssh_server"), "cat > " + shlex.quote(self.view.settings().get('ssh_path'))], stdin=subprocess.PIPE, startupinfo=getStartupInfo()) #ssh cp stdin to remote file
-        p.communicate(self.view.substr(sublime.Region(0, self.view.size())).encode("UTF-8")) #set stdin to the buffer contents
+        p = subprocess.Popen(["ssh", *getSshArgs(), self.view.settings().get("ssh_server"), "cat > " + shlex.quote(self.view.settings().get('ssh_path'))], stdin=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=getStartupInfo()) #ssh cp stdin to remote file
+        _, err = p.communicate(self.view.substr(sublime.Region(0, self.view.size())).encode("UTF-8")) #set stdin to the buffer contents
+
+        if p.returncode != 0:
+            sublime.error_message(makeErrorText(err, p.returncode, f"Unable to save remote file {self.view.settings().get('ssh_server')}:{self.view.settings().get('ssh_path')}"))
+            self.dirtyWhenDoHacks = True
 
         #The Windows Python temporary files cannot be opened by another process before close() (see tempfile.NamedTemporaryFile docs)
         #So on a Mac/Linux:

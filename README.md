@@ -21,6 +21,9 @@ The list input also contains various actions related to opening files.
 * Select the star (\*) option to enter a pattern like `*.c *.h`
 * Select the _New_ option to create new folders and open new files
 
+## Important
+You will need to setup ssh public/private key login to your remote machine so this plugin can connect to your server in the background without needing a password.
+
 ## How it Works
 When a remote file is opened, the contents of the file is copied into the buffer.<br>
 When the file is saved, the buffer is copied back into the remote file, and sublime is given a temporary file to save to which is later deleted.<br>
@@ -29,9 +32,6 @@ The file transferring is done using Popen's stdin and stdout to ssh, not scp.
 The file selection is done by opening an ssh connection after the server is input and `ls` is used to populate the folder/file list on demand.
 
 The only commands used by this plugin are `ssh` on the local machine and `ls`, `cat`, redirection (`>`), and `mkdir` (if you use _New_ to create folders) on the remote machine.
-
-## Important
-You will need to setup ssh public/private key login to your remote machine so this plugin can connect to your server in the background without needing a password.<br>
 
 ## Settings
 Open the settings file with one of these options.
@@ -44,6 +44,11 @@ Ssh's multiplexing feature is used to speed up connection and authentication whe
 The default connection keep alive time is 5 minutes and you can change this with the `multiplexing` setting.<br>
 The `multiplexing` key accepts keep alive (ControlPersist) times in the `120s` or `5m` formats.<br>
 If your system doesn't support multiplexing or you'd like to disable it for security reasons, set `multiplexing` to `false`.
+
+#### Timeout
+Use the `timeout` setting to control ssh's connection timeout in seconds.<br>
+The default is 7 seconds.<br>
+You can set `timeout` to `null` to use ssh's default timeout which is the system's tcp timeout.
 
 ### Key Bindings
 Key Bindings are disabled by default per Package Control requirements.<br>

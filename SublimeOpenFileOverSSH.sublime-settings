@@ -9,7 +9,31 @@
 	 * Accepts keep alive (ControlPersist) times in the 120s or 5m formats.
 	 * Set to false to disable multiplexing.
 	*/
-	//"multiplexing": "5m"
+	//"multiplexing": "5m",
+
+
+	/*
+	 * SSH Connection Timeout
+	 * Accepts timeout (ConnectTimeout) times in seconds.
+	 * Set to null to use ssh's default which is the system tcp timeout.
+	*/
+	//"timeout": 7,
+
+
+	/*
+	 * OpenSSH-Type Configuration
+	 * For advanced users only.
+	 * This plugin assumes the `ssh` command is OpenSSH.
+	 * If you are not sure, then your system ssh is most likely OpenSSH.
+	 * However, if for some reason `ssh` is not OpenSSH and you would still like to use this plugin,
+	 *     you can set this setting to false and all ssh config options will be removed.
+	 * If you do this:
+	 *     all the above settings will be ignored,
+	 *     password-less login checking and non-interactive settings will be disabled,
+	 *     most error checking won't work.
+	 * Use at your own risk.
+	*/
+	//"useOpenSshConfigArgs": true
 
 
 
