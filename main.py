@@ -58,6 +58,16 @@ def getSshArgs():
     #no user input
     args.extend(["-o", "BatchMode=yes"]) #Batch mode is StrictHostKeyChecking=yes (as opposed to ask) and PreferredAuthentications=publickey, i.e. no user input
 
+    #host keys
+    keyChecking = settings.get("hostKeyChecking", None)
+    if keyChecking != None:
+        if isinstance(keyChecking, bool) or keyChecking in ["yes", "no", "accept-new"]:
+            args.extend(["-o", f"StrictHostKeyChecking={keyChecking}"])
+            if not keyChecking or keyChecking == "no":
+                args.extend(["-o", "UserKnownHostsFile=/dev/null"]) #don't save keys if key checking is disabled
+        else:
+            print(f"SublimeOpenFileOverSSH: Unrecognized hostKeyChecking setting ({keyChecking}), falling back to default")
+
     #timeout
     timeout = settings.get("timeout", 7)
     if timeout != None:
@@ -92,7 +102,7 @@ def makeErrorText(sshStderr, sshRetCode, title):
     if error:
         msg = f"{title}.\n\nCode: {sshRetCode} ({errType})\nError: {error}"
         if "host key verification failed" in error.lower():
-            msg += "\n\nSSH to this server with your terminal to verify the host key."
+            msg += "\n\nSSH to this server with your terminal to verify the host key or change the hostKeyChecking setting."
         if "permission denied" in error.lower():
             msg += "\n\nYou must setup ssh public key authentication with this server for this plugin to work."
         if "timed out" in error.lower():

@@ -20,6 +20,16 @@
 	//"timeout": 7,
 
 
+	/* SSH Host Key Checking: checking host keys against the known_hosts file.
+	 * Accepts some ssh StrictHostKeyChecking values (yes, no, accept-new) or null.
+	 * The default is null which uses ssh's BatchMode default (which is most likely yes).
+	 * yes will always check keys and throws an error if a key does not exist or match.
+	 * no will never check keys and will not add keys to the known_hosts file (done with UserKnownHostsFile=/dev/null).
+	 * accept-new will add new keys to the known_hosts file and will only error if a previously saved key has changed.
+	*/
+	//"hostKeyChecking": null,
+
+
 	/*
 	 * OpenSSH-Type Configuration
 	 * For advanced users only.

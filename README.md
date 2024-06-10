@@ -50,6 +50,15 @@ Use the `timeout` setting to control ssh's connection timeout in seconds.<br>
 The default is 7 seconds.<br>
 You can set `timeout` to `null` to use ssh's default timeout which is the system's tcp timeout.
 
+#### Host Key Checking
+Host key checking can be controlled with the `hostKeyChecking` key.<br>
+This settings accepts yes, no, accept-new, or null most of which correspond to ssh's StrictHostKeyChecking setting.<br>
+`null` is the default and uses ssh's BatchMode default which is `yes`.<br>
+`yes` throws an error if a key does not exist or match.<br>
+`no` does not check or save keys.<br>
+`accept-new` saves new keys and only errors if a previously saved key has changed.
+
+
 ### Key Bindings
 Key Bindings are disabled by default per Package Control requirements.<br>
 Enable the Open via SSH key binding by opening the key binding file in a similar manner as the settings file and copying over the disabled binding.
@@ -61,3 +70,7 @@ v1.2.1: Fixed crashing sublime when a remote file was opened that did not have a
 v1.2: The wildcard (\*) option opens a text input that accepts one or more glob patterns such as \*.c h\* and opening multiple files is wayyyy faster<br>
 v1.1: Added a file browser like interface to the Open File File Over SSH command in the command pallet<br>
 v1.0: First version with Windows support
+
+## Contributing
+You can submit a PR if you'd like, but if you find a bug or would like a new feature feel free to open an Issue.<br>
+I'll respond to either as soon as I can.
