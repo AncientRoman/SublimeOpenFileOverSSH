@@ -7,17 +7,20 @@ This plugin should work on MacOS, Linux, and Windows.
 
 ## Usage
 Trigger the remote file selection using one of these options.
+
 * Use the _File > Open via SSH_ menu item
 * Run the _Open File Over SSH_ command from the command palette
 * Press _cmd-shift-o_ or _wndws-shift-o_ (you must set this up, see [Key Bindings](#key-bindings))
 
 Once triggered, input the server path and browse/open remote files as follows.
+
 1. Type in the scp-like path to your server (`user@server.ext:`), and press enter
 2. Once the server is validated and connected, a list input will appear which allows you to choose a folder or file
 3. Continue browsing the file system on your server until you find the file you want to open
 4. Enjoy finally being able to edit a remote file in sublime (2505 students amirite)
 
 The list input also contains various actions related to opening files.
+
 * Select the star (\*) option to enter a pattern like `*.c *.h`
 * Select the _New_ option to create new folders and open new files
 
@@ -35,6 +38,7 @@ The only commands used by this plugin are `ssh` on the local machine and `ls`, `
 
 ## Settings
 Open the settings file with one of these options.
+
 * Use the menu item _Preferences > Package Settings > Open File Over SSH > Settings_
 * Run the command pallet command _Preferences: Open File Over SSH Settings_
 * Open the file _Packages > User > SublimeOpenFileOverSSH.sublime-settings_
