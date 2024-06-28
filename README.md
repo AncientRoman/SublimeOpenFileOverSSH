@@ -2,8 +2,18 @@
 A Sublime Text 4 plugin that allows a file to be opened on a remote machine over ssh and seamlessly edited and saved back to the remote machine
 
 ## Installation
-Clone or download this repo into the Sublime Packages folder.<br>
 This plugin should work on MacOS, Linux, and Windows.
+
+### Package Control
+Sublime's [Package Control](https://packagecontrol.io/installation) is the best and easiest way to install this plugin.
+
+1. Run the _Package Control: Install Package_ command from the command pallet
+2. Search for and select `OpenFileOverSSH`
+3. Package Control will automatically install and keep this package up to date
+
+### Manual
+Clone or download this repo (or a [versioned release](https://github.com/AncientRoman/SublimeOpenFileOverSSH/releases)) into the Sublime Packages folder.
+
 
 ## Usage
 Trigger the remote file selection using one of these options.
