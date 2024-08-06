@@ -96,17 +96,20 @@ def getSshArgs():
 @singledispatch
 def makeErrorText(sshStderr, sshRetCode, title):
 
-	error = sshStderr.replace("\r", "").rstrip("\n") #ssh's output to stderr has line endings of CRLF per ssh specs. Remove trailing new line too
-	errType = 'ssh' if sshRetCode == 255 else 'remote'
+	error = sshStderr and sshStderr.replace("\r", "").rstrip("\n") #ssh's output to stderr has line endings of CRLF per ssh specs. Remove trailing new line too
+	errType = 'ssh' if sshRetCode == 255 or sshRetCode == None else 'remote'
 
 	if error:
 		msg = f"{title}.\n\nCode: {sshRetCode} ({errType})\nError: {error}"
-		if "host key verification failed" in error.lower():
+		lower = error.lower()
+		if "host key verification failed" in lower:
 			msg += "\n\nSSH to this server with your terminal to verify the host key or change the hostKeyChecking setting."
-		if "permission denied" in error.lower():
+		if "permission denied" in lower:
 			msg += "\n\nYou must setup ssh public key authentication with this server for this plugin to work."
-		if "timed out" in error.lower():
+		if "timed out" in lower:
 			msg += "\n\nThe timeout time can be changed in this plugin's settings if needed."
+		if "getsockname failed: bad file descriptor" in lower and isWindows:
+			msg += "\n\nThis is likely from SSH not supporting multiplexing on windows. You can disable multiplexing in the settings file."
 		return msg
 	else:
 		return f"{title}.\nAn unknown {errType} error occurred.\nError Code: {sshRetCode}"
@@ -131,14 +134,26 @@ class SshShell():
 	def __init__(self, userAndServer):
 
 		self.shell = subprocess.Popen(["ssh", *getSshArgs(), userAndServer], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=getStartupInfo())
-		self.runCmd() #read past all login information i.e. prepare for commands; will block until completed or error
+		ret = self.runCmd(retErr=True) #read past all login information i.e. prepare for commands; will block until completed or error
 
-		if self.isAlive():
+		"""
+		 * Theoretically if ret is false, isAlive should also be false.
+		 * However on windows this is not always the case.
+		 * For example, when attempting to use multiplexing on windows:
+		 *    ret is false because the read() returned EOF
+		 *    isAlive() is true (because ssh hasn't exited yet??)
+		 *    if this isn't caught, the next write()/flush() will error with broken pipe (which is EINVAL on python windows)
+		 * Leave it up to windows to make code complicated :(
+		"""
+		if self.isAlive() and not ret == False:
 			self.thread = threading.Thread(target=self.shell.stderr.read, daemon=True) #consume sterr so a full pipe doesn't block our process
 			self.thread.start()
 			self.error = None
 		else:
 			self.error = self.shell.stderr.read().decode().replace("\r", "").rstrip("\n") #ssh's output to stderr has line endings of CRLF per ssh specs. Remove trailing new line too
+			if self.isAlive(): #ensure the process is dead (in case we got here through ret being False); this is needed because isAlive is used to check for errors
+				self.close(timeout=0.25)
+
 
 	@property
 	def retCode(self):
@@ -156,21 +171,30 @@ class SshShell():
 	def isAlive(self):
 		return self.shell.poll() == None
 
-	def runCmd(self, cmd=""):
+	def runCmd(self, cmd="", retErr=False): #set retErr to True to return False on error instead of displaying error dialogs
 
 		if cmd != "":
 			cmd += "; "
 		cmd = cmd.encode()
 		seekingString = self.getSeekingString()
-		self.shell.stdin.write(cmd + b"echo '" + seekingString + b"'\n")
-		self.shell.stdin.flush()
+		try:
+			self.shell.stdin.write(cmd + b"echo '" + seekingString + b"'\n")
+			self.shell.stdin.flush()
+		except (BrokenPipeError, OSError) as e: #Will catch closed pipe errors if ssh has terminated (BrokenPipeError on unix, OSError EINVAL on windows)
+			if retErr:
+				return False
+			sublime.error_message(makeErrorText(str(e), self.retCode, f"Unable to communicate with the server (write)"))
+			raise e
 
 		lines = []
 
 		while True:
 
 			line = self.shell.stdout.readline()
-			if len(line) == 0: #EOF
+			if len(line) == 0: #EOF i.e. error
+				if retErr:
+					return False
+				sublime.error_message(makeErrorText(None, self.retCode, f"Unable to communicate with the server (read)"))
 				break
 
 			lines.append(self.trimNewLine(line))
@@ -184,8 +208,12 @@ class SshShell():
 		filePath = ("~/" if filePath[0] != "/" else "") + shlex.quote(filePath) #if filePath doesn't start with a /, then its assumed filePath is relative to ~, because the current directory can be anywhere
 		filePath = filePath.encode()
 		seekingString = self.getSeekingString()
-		self.shell.stdin.write(b"cat " + filePath + b"; echo -e '\\n" + seekingString + b"'\n") #need the \n so seeking string is on its own line
-		self.shell.stdin.flush()
+		try:
+			self.shell.stdin.write(b"cat " + filePath + b"; echo -e '\\n" + seekingString + b"'\n") #need the \n so seeking string is on its own line
+			self.shell.stdin.flush()
+		except (BrokenPipeError, OSError) as e:
+			print(f"SublimeOpenFileOverSSH: write error in SshShell readFile(): {str(e)}")
+			pass #continue because readline() below will return EOF which will trigger the error text
 
 		lines = []
 
@@ -193,9 +221,11 @@ class SshShell():
 
 			line = self.shell.stdout.readline()
 			if len(line) == 0: #EOF i.e. error
+				if len(viewToShell) < 2: #i.e. this is the only or last file being opened at the same time
+					sublime.error_message(makeErrorText(None, self.retCode, f"Unable to communicate with the server (file read)"))
 				#need three lines to always make it past the return slicing
 				lines.insert(0, b"\n")
-				lines.insert(0, b"Warning: an error occurred while reading this file (" + filePath + b") from the remote server.\nThis file may be wrong or incomplete.\nDO NOT SAVE THIS FILE unless you are sure it's correct and complete.\nYou may reopen this file to ensure correctness with the `File:Revert` command from the command pallet\n\n")
+				lines.insert(0, b"Warning: an error or connection loss occurred while reading this file (" + filePath + b") from the remote server.\nThis file may be wrong or incomplete.\nDO NOT SAVE THIS FILE unless you are sure it's correct and complete.\nYou may reopen this file to ensure correctness with the `File:Revert` command from the command pallet\n\n")
 				lines.insert(0, b"\n")
 				break
 
@@ -205,19 +235,39 @@ class SshShell():
 
 		return b"".join(lines[:-1])[:-1] #remove \n added by echo
 
-	def close(self):
+	def close(self, timeout=None):
 
+		#close/kill ssh
 		if self.isAlive():
-			self.shell.stdin.write(b"exit\n")
-			self.shell.stdin.flush()
-			self.shell.stdin.close()
-			print("SublimeOpenFileOverSSH: Waiting for ssh to exit")
-			self.shell.wait()
+
+			try:
+				self.shell.stdin.write(b"exit\n")
+				self.shell.stdin.flush()
+			except (BrokenPipeError, OSError):
+				pass
+			try:
+				self.shell.stdin.close()
+			except (BrokenPipeError, OSError):
+				pass
+
+			print("SublimeOpenFileOverSSH: Waiting for ssh to exit...")
+			try:
+				self.shell.wait(timeout)
+			except TimeoutExpired:
+				print("SublimeOpenFileOverSSH: ssh exit timed out, killing...")
+				self.ssh.terminate()
+				try:
+					self.shell.wait(timeout)
+				except TimeoutExpired:
+					self.shell.kill()
+					self.shell.wait()
 			print("SublimeOpenFileOverSSH: ssh finished with return code %d" % self.shell.returncode)
 
+
+		#clean up
 		try:
 			self.thread.join() #join thread to free up resources
-			print("SublimeOpenFileOverSSH: ssh thread done")
+			print("SublimeOpenFileOverSSH: ssh thread joined")
 		except AttributeError:
 			print("SublimeOpenFileOverSSH: no ssh thread cleanup needed")
 
