@@ -8,8 +8,12 @@
 	 *  speeds up connection and authentication when browsing and saving files in short succession.
 	 * Accepts keep alive (ControlPersist) times in the 120s or 5m formats.
 	 * Set to false to disable multiplexing.
+	 *
+	 * OpenSSH_for_Windows (the default windows ssh) does not support multiplexing so the default on a Windows machine is false.
+	 * See: https://github.com/PowerShell/Win32-OpenSSH/issues/405
 	*/
-	//"multiplexing": "5m",
+	//"multiplexing": "5m", //Default (MacOS and Linux)
+	//"multiplexing": false, //Windows
 
 
 	/*

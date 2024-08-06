@@ -77,7 +77,7 @@ def getSshArgs():
 		args.extend(["-o", f"ConnectTimeout={timeout}"]) #not specifying this uses system tcp timeout
 
 	#multiplexing
-	persist = settings.get("multiplexing", "5m")
+	persist = settings.get("multiplexing", "5m" if not isWindows else False) #OpenSSH_for_Windows (as of 8/2024) does not support multiplexing
 	if persist not in [None, False, 0, "0"]:
 
 		if isinstance(persist, bool) and persist: #True == 1 so must check if its a bool
@@ -139,7 +139,7 @@ class SshShell():
 		"""
 		 * Theoretically if ret is false, isAlive should also be false.
 		 * However on windows this is not always the case.
-		 * For example, when attempting to use multiplexing on windows:
+		 * For example, when attempting to use multiplexing or on another ssh error (host key, password auth) in windows:
 		 *    ret is false because the read() returned EOF
 		 *    isAlive() is true (because ssh hasn't exited yet??)
 		 *    if this isn't caught, the next write()/flush() will error with broken pipe (which is EINVAL on python windows)

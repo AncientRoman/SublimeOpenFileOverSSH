@@ -57,7 +57,8 @@ Open the settings file with one of these options.
 Ssh's multiplexing feature is used to speed up connection and authentication when browsing and saving files in short succession.<br>
 The default connection keep alive time is 5 minutes and you can change this with the `multiplexing` setting.<br>
 The `multiplexing` key accepts keep alive (ControlPersist) times in the `120s` or `5m` formats.<br>
-If your system doesn't support multiplexing or you'd like to disable it for security reasons, set `multiplexing` to `false`.
+If your system doesn't support multiplexing or you'd like to disable it for security reasons, set `multiplexing` to `false`.<br>
+The default windows ssh (OpenSSH_for_Windows) does not support multiplexing, so windows has this setting set to `false`.
 
 #### Timeout
 Use the `timeout` setting to control ssh's connection timeout in seconds.<br>
