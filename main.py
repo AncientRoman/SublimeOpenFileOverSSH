@@ -27,7 +27,7 @@ from functools import singledispatch
 """
 
 
-SETTINGS_FILE = "SublimeOpenFileOverSSH.sublime-settings"
+SETTINGS_FILE = "OpenFileOverSSH.sublime-settings"
 
 isWindows = (sublime.platform() == "windows")
 
@@ -66,13 +66,13 @@ def getSshArgs():
 			if not keyChecking or keyChecking == "no":
 				args.extend(["-o", "UserKnownHostsFile=/dev/null"]) #don't save keys if key checking is disabled
 		else:
-			print(f"SublimeOpenFileOverSSH: Unrecognized hostKeyChecking setting ({keyChecking}), falling back to default")
+			print(f"OpenFileOverSSH: Unrecognized hostKeyChecking setting ({keyChecking}), falling back to default")
 
 	#timeout
 	timeout = settings.get("timeout", 7)
 	if timeout != None:
 		if not (isinstance(timeout, int) or isinstance(timeout, str) and timeout.isdecimal()):
-			print(f"SublimeOpenFileOverSSH: Unrecognized timeout setting ({timeout}), falling back to default")
+			print(f"OpenFileOverSSH: Unrecognized timeout setting ({timeout}), falling back to default")
 			timeout = 7
 		args.extend(["-o", f"ConnectTimeout={timeout}"]) #not specifying this uses system tcp timeout
 
@@ -83,7 +83,7 @@ def getSshArgs():
 		if isinstance(persist, bool) and persist: #True == 1 so must check if its a bool
 			persist = "5m"
 		if not (isinstance(persist, int) or isinstance(persist, str) and (persist.isdecimal() or persist[-1] in ["m", "s"] and persist[:-1].isdecimal())):
-			print(f"SublimeOpenFileOverSSH: Unrecognized multiplexing setting ({persist}), falling back to default")
+			print(f"OpenFileOverSSH: Unrecognized multiplexing setting ({persist}), falling back to default")
 			persist = "5m"
 
 		#Using %C to both escape special characters and obfuscate the connection details
@@ -212,7 +212,7 @@ class SshShell():
 			self.shell.stdin.write(b"cat " + filePath + b"; echo -e '\\n" + seekingString + b"'\n") #need the \n so seeking string is on its own line
 			self.shell.stdin.flush()
 		except (BrokenPipeError, OSError) as e:
-			print(f"SublimeOpenFileOverSSH: write error in SshShell readFile(): {str(e)}")
+			print(f"OpenFileOverSSH: write error in SshShell readFile(): {str(e)}")
 			pass #continue because readline() below will return EOF which will trigger the error text
 
 		lines = []
@@ -250,26 +250,26 @@ class SshShell():
 			except (BrokenPipeError, OSError):
 				pass
 
-			print("SublimeOpenFileOverSSH: Waiting for ssh to exit...")
+			print("OpenFileOverSSH: Waiting for ssh to exit...")
 			try:
 				self.shell.wait(timeout)
 			except TimeoutExpired:
-				print("SublimeOpenFileOverSSH: ssh exit timed out, killing...")
+				print("OpenFileOverSSH: ssh exit timed out, killing...")
 				self.ssh.terminate()
 				try:
 					self.shell.wait(timeout)
 				except TimeoutExpired:
 					self.shell.kill()
 					self.shell.wait()
-			print("SublimeOpenFileOverSSH: ssh finished with return code %d" % self.shell.returncode)
+			print("OpenFileOverSSH: ssh finished with return code %d" % self.shell.returncode)
 
 
 		#clean up
 		try:
 			self.thread.join() #join thread to free up resources
-			print("SublimeOpenFileOverSSH: ssh thread joined")
+			print("OpenFileOverSSH: ssh thread joined")
 		except AttributeError:
-			print("SublimeOpenFileOverSSH: no ssh thread cleanup needed")
+			print("OpenFileOverSSH: no ssh thread cleanup needed")
 
 	def __del__(self):
 

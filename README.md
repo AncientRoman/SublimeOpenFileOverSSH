@@ -12,7 +12,10 @@ Sublime's [Package Control](https://packagecontrol.io/installation) is the best 
 3. Package Control will automatically install and keep this package up to date
 
 ### Manual
-Clone or download this repo (or a [versioned release](https://github.com/AncientRoman/SublimeOpenFileOverSSH/releases)) into the Sublime Packages folder.
+
+1. Clone or download this repo (or a [versioned release](https://github.com/AncientRoman/SublimeOpenFileOverSSH/releases)) into the Sublime Packages folder.
+2. Rename the new folder to "OpenFileOverSSH"
+3. Restart Sublime Text
 
 
 ## Usage
@@ -51,7 +54,7 @@ Open the settings file with one of these options.
 
 * Use the menu item _Preferences > Package Settings > Open File Over SSH > Settings_
 * Run the command pallet command _Preferences: Open File Over SSH Settings_
-* Open the file _Packages > User > SublimeOpenFileOverSSH.sublime-settings_
+* Open the file _Packages > User > OpenFileOverSSH.sublime-settings_
 
 #### Multiplexing
 Ssh's multiplexing feature is used to speed up connection and authentication when browsing and saving files in short succession.<br>
