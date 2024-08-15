@@ -289,7 +289,7 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 	@staticmethod
 	def isSyntaxOk(text):
 
-		return "@" in text and text[-1] == ":"
+		return len(text) > 2 and text[-1] == ":" and ("@" not in text or text.count("@") == 1 and text[0] != "@" and text[-2] != "@")
 
 	#gray placeholder text
 	def placeholder(self):
@@ -306,6 +306,10 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 
 		if not self.isSyntaxOk(text):
 			return "Invalid Server Syntax"
+
+		if "@" not in text:
+			return "Server Input Valid for Default Username"
+
 
 		return "Server Input Valid"
 
@@ -368,7 +372,7 @@ class globInputHandler(sublime_plugin.TextInputHandler):
 
 	def getMatchingFiles(self, text):
 
-		return self.ssh.runCmd(f"/bin/ls -1Lpd {text} | egrep -v /$")
+		return self.ssh.runCmd(f"/bin/ls -1Lpd -- {text} | grep -v /$")
 
 	#gray placeholder text
 	def placeholder(self):
