@@ -1,4 +1,5 @@
 import os #temp file removal
+import math #pretty size calcs
 import shlex #shell arg escaping
 import string #random string creation
 import random #random string creation
@@ -7,6 +8,7 @@ import tempfile
 import threading #stderr consuming
 import subprocess #popen
 import sublime_plugin
+from enum import Enum
 from functools import singledispatch
 
 """
@@ -129,12 +131,15 @@ class SshShell():
 	 * after the constructor returns, ssh has either errored or is connected to remote and ready to receive commands
 	"""
 
+	setupCmds = [
+		"export LC_TIME=POSIX" #set ls -l to output a standardized time format
+	]
 	seekingString = b"A random string for seeking"
 
 	def __init__(self, userAndServer):
 
 		self.shell = subprocess.Popen(["ssh", *getSshArgs(), userAndServer], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=getStartupInfo())
-		ret = self.runCmd(retErr=True) #read past all login information i.e. prepare for commands; will block until completed or error
+		ret = self.runCmd("; ".join(self.setupCmds), retErr=True) #read past all login information and run the setupCmds; will block until completed or error
 
 		"""
 		 * Theoretically if ret is false, isAlive should also be false.
@@ -510,7 +515,7 @@ class newInputHandler(sublime_plugin.TextInputHandler):
 
 		#open the file
 		if len(file) > 0:
-			self.argz["path"].append(pathInputHandler.actions.new) #make it look like the user selected new in the new (or old) folder(s)
+			self.argz["path"].append(pathInputHandler.Action.NEW) #make it look like the user selected new in the new (or old) folder(s)
 			self.argz["paths"] = ["".join(self.argz["path"][:-1]) + file]
 			sublime.load_settings(SETTINGS_FILE).set("path", self.argz["path"])
 		else:
@@ -535,20 +540,26 @@ class newInputHandler(sublime_plugin.TextInputHandler):
 #input pallet path input
 class pathInputHandler(sublime_plugin.ListInputHandler):
 
-	fileKind = (sublime.KindId.COLOR_YELLOWISH, "f", "")
-	folderKind = (sublime.KindId.COLOR_CYANISH, "F", "")
-	actionKind = (sublime.KindId.COLOR_PURPLISH, "-", "")
+	class Kind(tuple, Enum):
+
+		FILE = (sublime.KindId.COLOR_YELLOWISH, "f", "")
+		FOLDER = (sublime.KindId.COLOR_CYANISH, "F", "")
+		ACTION = (sublime.KindId.COLOR_PURPLISH, "-", "")
+		ERROR = (sublime.KindId.COLOR_REDISH, "!", "")
 
 	#ListInputItem value must be a sublime.Value so this class helps store InputHandlers in the ListInputItem
-	class actions:
+	class Action(int, Enum):
 
-		glob = 1
-		new = 2
+		GLOB = 1, "Open Multiple Files with a Glob", globInputHandler
+		NEW = 2, "Make a New File or Folder Here", newInputHandler
 
-		info = {
-			glob: {"preview": "Open Multiple Files with a Glob", "handler": globInputHandler},
-			new: {"preview": "Make a New File or Folder Here", "handler": newInputHandler}
-		}
+		def __new__(cls, val, preview, handler):
+
+			obj = int.__new__(cls, val)
+			obj._value_ = val
+			obj.preview = preview
+			obj.handler = handler
+			return obj
 
 
 	def __init__(self, argz):
@@ -570,23 +581,58 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 	def isFolder(strValue):
 		return strValue.endswith("/")
 
+	@staticmethod
+	def prettySize(bytes):
+
+		if bytes == 0:
+			return "0"
+		sizes = ("B", "K", "M", "G", "T", "P", "E", "Z", "Y") #future proof lol
+		i = int(math.floor(math.log(bytes, 1024))) #uses powers of 2 e.g. MiB
+		p = math.pow(1024, i)
+		s = bytes / p
+		return f"{int(round(s)) if s.is_integer() else round(s, 1)}{sizes[i]}"
+
 	#ls, actions, and initial selection
 	def list_items(self):
 
-		files = self.ssh.runCmd("/bin/ls -1Lp")
+		files = self.ssh.runCmd("/bin/ls -1Lp -lgo")[1:] #skip the total line
 		hasAFile = False
+		self.error = None
 
-		for i, file in enumerate(files):
+		for i, fileInfo in enumerate(files):
 
+			fileInfo = fileInfo.split(maxsplit=6) #perms, links, bytes, dt1, dt2, dt3, name; requires LC_TIME=POSIX
+			if len(fileInfo) != 7:
+				if not self.error:
+					print(f"OpenFileOverSSH: Unrecognized ls output (partial):\n{chr(10).join([file for file in files if isinstance(file, str)])}") #char(10) is \n cause can't use a \ in an f string expr
+				self.error = f"Unrecognized file info (skipping): {files[i]} : {fileInfo}"
+				print(f"OpenFileOverSSH: {self.error}")
+
+
+			file = fileInfo[-1]
 			isFolder = self.isFolder(file)
-			files[i] = sublime.ListInputItem(file, file, annotation="->" if isFolder else "", kind=self.folderKind if isFolder else self.fileKind)
-			if not isFolder:
+			if isFolder:
+				try:
+					size = int(fileInfo[1]) - 2 #number of sub-directories
+				except ValueError:
+					size = ""
+			else:
+				try:
+					size = self.prettySize(int(fileInfo[2]))
+				except ValueError:
+					size = fileInfo[2]
+
 				hasAFile = True
 
-		if hasAFile:
-			files.append(sublime.ListInputItem("*", self.actions.glob, annotation="Pattern", kind=self.actionKind))
+			files[i] = sublime.ListInputItem(file, file, annotation=f"->{size}" if isFolder else size, kind=self.Kind.FOLDER if isFolder else self.Kind.FILE)
 
-		files.append(sublime.ListInputItem("New", self.actions.new, annotation="Create", kind=self.actionKind))
+		if hasAFile:
+			files.append(sublime.ListInputItem("*", self.Action.GLOB, annotation="Pattern", kind=self.Kind.ACTION))
+
+		files.append(sublime.ListInputItem("New", self.Action.NEW, annotation="Create", kind=self.Kind.ACTION))
+
+		if self.error:
+			files.insert(0, sublime.ListInputItem("WARNING: A Parsing Error Occurred and some Entries are Missing or Wrong", None, annotation="Warning", kind=self.Kind.ERROR))
 
 
 		try:
@@ -606,13 +652,18 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 	def preview(self, value):
 
 		if value == None:
-			return "No matches found. You can use the New action to create a file."
+			return self.error or "No items found. You can use the New action to create a file."
 		if not self.isPath(value):
-			return self.actions.info[value]["preview"]
+			return self.Action(value).preview
 		elif self.isFolder(value):
 			return "Enter Folder"
 		else:
 			return "Open File"
+
+	#disallow selection of errors
+	def validate(self, value):
+
+		return value != None
 
 	#update values
 	def confirm(self, value):
@@ -645,7 +696,7 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 		value = args["path"]
 
 		if not self.isPath(value):
-			return self.actions.info[value]["handler"](self.argz)
+			return self.Action(value).handler(self.argz)
 		if self.isFolder(value):
 			return pathInputHandler(self.argz)
 
@@ -716,7 +767,7 @@ class openFileOverSshTextCommand(sublime_plugin.TextCommand):
 			p = subprocess.Popen(["ssh", *getSshArgs(), self.view.settings().get("ssh_server"), "cat " + shlex.quote(self.view.settings().get("ssh_path"))], stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=getStartupInfo())
 			txt, err = p.communicate()
 
-			if p.returncode != 0 and not (p.returncode == 1 and "No such file or directory" in error): #ok to open a non existent file
+			if p.returncode != 0 and not (p.returncode == 1 and b"No such file or directory" in err): #ok to open a non existent file
 				path = f"{self.view.settings().get('ssh_server')}:{self.view.settings().get('ssh_path')}"
 				txt = (makeErrorText(err, p.returncode, f"Unable to open this remote file ({path})") + "\n\nDO NOT SAVE THIS FILE because the remote file contents may be destroyed.\nOnce you fix the problem, run the `File:Revert` command from the command pallet to reopen this file.").encode()
 				sublime.error_message(makeErrorText(err, p.returncode, f"Unable to open remote file {path}"))
