@@ -1,4 +1,4 @@
-import os #temp file removal
+import os #temp file removal and path splitting
 import math #pretty size calcs
 import shlex #shell arg escaping
 import string #random string creation
@@ -33,7 +33,7 @@ SETTINGS_FILE = "OpenFileOverSSH.sublime-settings"
 
 isWindows = (sublime.platform() == "windows")
 
-viewToShell = {} #Maps view.id() to an sshShell. Allows multiple files to be opened using the same SshShell
+viewToShell = {} #Maps view.id() to an SshShell. Allows multiple files to be opened using the same SshShell
 
 
 #gets the required startup info for Popen
@@ -99,19 +99,20 @@ def getSshArgs():
 def makeErrorText(sshStderr, sshRetCode, title):
 
 	error = sshStderr and sshStderr.replace("\r", "").rstrip("\n") #ssh's output to stderr has line endings of CRLF per ssh specs. Remove trailing new line too
-	errType = 'ssh' if sshRetCode == 255 or sshRetCode == None else 'remote'
+	errType = "ssh" if sshRetCode == 255 or sshRetCode == None else "remote"
 
 	if error:
 		msg = f"{title}.\n\nCode: {sshRetCode} ({errType})\nError: {error}"
 		lower = error.lower()
-		if "host key verification failed" in lower:
-			msg += "\n\nSSH to this server with your terminal to verify the host key or change the hostKeyChecking setting."
-		if "permission denied" in lower:
-			msg += "\n\nYou must setup ssh public key authentication with this server for this plugin to work."
-		if "timed out" in lower:
-			msg += "\n\nThe timeout time can be changed in this plugin's settings if needed."
-		if "getsockname failed: bad file descriptor" in lower and isWindows:
-			msg += "\n\nThis is likely from SSH not supporting multiplexing on windows. You can disable multiplexing in the settings file."
+		if errType == "ssh":
+			if "host key verification failed" in lower:
+				msg += "\n\nSSH to this server with your terminal to verify the host key or change the hostKeyChecking setting."
+			if "permission denied" in lower:
+				msg += "\n\nYou must setup ssh public key authentication with this server for this plugin to work."
+			if "timed out" in lower:
+				msg += "\n\nThe timeout time can be changed in this plugin's settings if needed."
+			if "getsockname failed: bad file descriptor" in lower and isWindows:
+				msg += "\n\nThis is likely from SSH not supporting multiplexing on windows. You can disable multiplexing in the settings file."
 		return msg
 	else:
 		return f"{title}.\nAn unknown {errType} error occurred.\nError Code: {sshRetCode}"
@@ -158,7 +159,6 @@ class SshShell():
 			self.error = self.shell.stderr.read().decode().replace("\r", "").rstrip("\n") #ssh's output to stderr has line endings of CRLF per ssh specs. Remove trailing new line too
 			if self.isAlive(): #ensure the process is dead (in case we got here through ret being False); this is needed because isAlive is used to check for errors
 				self.close(timeout=0.25)
-
 
 	@property
 	def retCode(self):
@@ -240,6 +240,18 @@ class SshShell():
 
 		return b"".join(lines[:-1])[:-1] #remove \n added by echo
 
+	def cd(self, path):
+
+		"""
+		 * This function runs cd and checks for success. Returns True on success, (retCode, errorStr) on failure
+		 * Ideally (and hopefully eventually) stdErr and exit codes will be available with runCmd
+		 *     which will probably be incorporated into an asyncio update.
+		 * But until then, here's cd with error checking.
+		"""
+
+		ret = self.runCmd(f"cd {shlex.quote(path)} 2>&1; echo $?")
+		return ret[-1] == "0" or (int(ret[-1]), "\n".join(ret[:-1]))
+
 	def close(self, timeout=None):
 
 		#close/kill ssh
@@ -292,9 +304,19 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 		self.ssh = None
 
 	@staticmethod
-	def isSyntaxOk(text):
+	def checkSyntax(text): #false (0): invalid, 1: user/server, 2: server, 3: folder path, 4: file path
 
-		return len(text) > 2 and text[-1] == ":" and ("@" not in text or text.count("@") == 1 and text[0] != "@" and text[-2] != "@")
+		if not (
+			len(text) >= 2 and
+			":" in text and
+			("@" not in text or text.count("@") == 1 and text[0] != "@" and text.index("@") < text.index(":") - 1)
+		):
+			return False
+
+		if text[-1] == ":":
+			return 1 if "@" in text else 2
+		else:
+			return 3 if text[-1] == "/" else 4
 
 	#gray placeholder text
 	def placeholder(self):
@@ -309,30 +331,48 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 	#syntax check
 	def preview(self, text):
 
-		if not self.isSyntaxOk(text):
+		type = self.checkSyntax(text)
+
+		if not type:
 			return "Invalid Server Syntax"
 
-		if "@" not in text:
-			return "Server Input Valid for Default Username"
+		ret = "Server Input Valid"
+		if type == 2:
+			ret += "for Default Username"
+		elif type == 3:
+			ret += "; Open File Browser at Folder"
+		elif type == 4:
+			ret += "; Open/Create File"
 
-
-		return "Server Input Valid"
+		return ret
 
 	#check server
 	def validate(self, text):
 
-		if self.isSyntaxOk(text):
+		type = self.checkSyntax(text)
 
-			server = text[:-1]
-			self.ssh = SshShell(server)
+		if not type:
+			return False
+		if type == 4:
+			return True
 
-			if self.ssh.isAlive(): #check if not dead
-				return True
+		server = text[:text.index(":")]
+		self.ssh = SshShell(server)
 
+		if not self.ssh.isAlive(): #check if not dead
 			#the dialog looks kinda ugly, but I can't think of a better way
 			sublime.error_message(makeErrorText(self.ssh.error, self.ssh.retCode, f"Could not connect to {server}"))
+			return False
 
-		return False
+		if type == 3:
+
+			path = text[text.index(":") + 1:]
+			ret = self.ssh.cd(path)
+			if ret != True:
+				sublime.error_message(makeErrorText(ret[1], ret[0], f"Unable to access {path}"))
+				return False
+
+		return True
 
 	#save value
 	def confirm(self, text):
@@ -340,8 +380,10 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 		sublime.load_settings(SETTINGS_FILE).set("server", text)
 		sublime.save_settings(SETTINGS_FILE)
 
-		self.argz["server"] = text[:-1]
+		self.argz["server"] = text[:text.index(":")]
 		self.argz["sshShell"] = self.ssh
+		if text[-1] != ":": #i.e. type 3 or 4
+			self.argz["path" if text[-1] == "/" else "paths"] = [text[text.index(":") + 1:]]
 
 	#close ssh
 	def cancel(self):
@@ -352,7 +394,7 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 	#file selection
 	def next_input(self, args):
 
-		return pathInputHandler(self.argz)
+		return pathInputHandler(self.argz) if not "paths" in self.argz else None
 
 #input pallet action glob input
 class globInputHandler(sublime_plugin.TextInputHandler):
@@ -660,21 +702,26 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 		else:
 			return "Open File"
 
-	#disallow selection of errors
+	#check folder
 	def validate(self, value):
 
-		return value != None
+		if value == None:
+			return False
+
+		if self.isPath(value) and self.isFolder(value):
+			ret = self.ssh.cd(value)
+			if ret != True:
+				sublime.error_message(makeErrorText(ret[1], ret[0], f"Unable to access {value}"))
+				return False
+
+		return True
 
 	#update values
 	def confirm(self, value):
 
 		self.argz["path"].append(value)
 
-		if not self.isPath(value):
-			pass
-		elif self.isFolder(value):
-			self.ssh.runCmd("cd " + shlex.quote(value))
-		else:
+		if self.isPath(value) and not self.isFolder(value):
 			#save path when done as opposed to as we go because this how sublime does it with internal commands
 			self.settings.set("path", self.argz["path"])
 			sublime.save_settings(SETTINGS_FILE)
@@ -712,14 +759,13 @@ class openFileOverSshCommand(sublime_plugin.WindowCommand):
 		#however, using the sshShell requires that the file must not contain a line with the seeking string
 		#while that is an unlikely occurrence, I will use multiplexing if its available when opening a single file to ensure a non-glob is always opened correctly
 
-		useShell = len(self.argz["paths"]) > 1 or "ControlMaster=auto" not in getSshArgs() #i.e. isMultipleFiles || isMultiplexingDisabled
+		useShell = self.argz["sshShell"] and (len(self.argz["paths"]) > 1 or "ControlMaster=auto" not in getSshArgs()) #i.e. isMultipleFiles || isMultiplexingDisabled
 
 		for path in self.argz["paths"]:
 
 			#open a temp file with the correct extension
 			#I can't just make a new file because I want the syntax to be set based on the remote file's extension
-			ext = path.rfind(".")
-			ext = path[ext:] if ext != -1 else ""
+			_, ext = os.path.splitext(path)
 			file = tempfile.NamedTemporaryFile(suffix=ext)
 			view = self.window.open_file(file.name)
 

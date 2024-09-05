@@ -1,8 +1,8 @@
 # SublimeOpenFileOverSSH v1.4.1
-A Sublime Text 4 plugin that allows a file to be opened on a remote machine over ssh and seamlessly edited and saved back to the remote machine
+A lightweight Sublime Text 4 plugin that allows a file to be opened on a remote machine over ssh and seamlessly edited and saved back to the remote machine
 
 ## Installation
-This plugin should work on MacOS, Linux, and Windows.
+This plugin works on MacOS, Linux, and Windows.
 
 ### Package Control
 Sublime's [Package Control](https://packagecontrol.io/installation) is the best and easiest way to install this plugin.
@@ -25,7 +25,7 @@ Trigger the remote file selection using one of these options.
 * Run the _Open File Over SSH_ command from the command palette
 * Press _cmd-shift-o_ or _wndws-shift-o_ (you must set this up, see [Key Bindings](#key-bindings))
 
-Once triggered, input the server path and browse/open remote files as follows.
+Once triggered, input the server details and browse/open remote files as follows.
 
 1. Type in the scp-like path to your server (`user@server.ext:`), and press enter
 2. Once the server is validated and connected, a list input will appear which allows you to choose a folder or file
@@ -37,12 +37,21 @@ The list input also contains various actions related to opening files.
 * Select the star (\*) option to enter a pattern like `*.c *.h`
 * Select the _New_ option to create new folders and open new files
 
+#### Advanced
+The server input can also accept paths similar to scp.
+
+* Use a folder path (`user@server.ext:/path/to/folder/`) to open the file browser at a specific folder
+* Use a file path (`user@server:path/to/file.txt`) to directly open a file without triggering the picker
+* The username can be omitted to use the default user (`server.ext:`)
+
+The file browser shows the size of files in powers of 2 (MiB) and the number of subdirectories in a directory.
+
 ## Important
 You will need to setup ssh public/private key login to your remote machine so this plugin can connect to your server in the background without needing a password.
 
 ## How it Works
 When a remote file is opened, the contents of the file is copied into the buffer.<br>
-When the file is saved, the buffer is copied back into the remote file, and sublime is given a temporary file to save to which is later deleted.<br>
+When the file is saved, the buffer is copied back into the remote file and sublime is given a temporary file to save to which is later deleted.<br>
 The file transferring is done using Popen's stdin and stdout to ssh, not scp.
 
 The file selection is done by opening an ssh connection after the server is input and `ls` is used to populate the folder/file list on demand.
