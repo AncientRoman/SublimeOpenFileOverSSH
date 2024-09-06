@@ -183,7 +183,7 @@ class SshShell():
 		cmd = cmd.encode()
 		seekingString = self.getSeekingString()
 		try:
-			self.shell.stdin.write(cmd + b"echo '" + seekingString + b"'\n")
+			self.shell.stdin.write(cmd + b"printf '" + seekingString + b"\\n'\n")
 			self.shell.stdin.flush()
 		except (BrokenPipeError, OSError) as e: #Will catch closed pipe errors if ssh has terminated (BrokenPipeError on unix, OSError EINVAL on windows)
 			if retErr:
@@ -214,7 +214,7 @@ class SshShell():
 		filePath = filePath.encode()
 		seekingString = self.getSeekingString()
 		try:
-			self.shell.stdin.write(b"cat " + filePath + b"; echo -e '\\n" + seekingString + b"'\n") #need the \n so seeking string is on its own line
+			self.shell.stdin.write(b"cat -- " + filePath + b"; printf '\\n" + seekingString + b"\\n'\n") #need the leading \n so seeking string is on its own line
 			self.shell.stdin.flush()
 		except (BrokenPipeError, OSError) as e:
 			print(f"OpenFileOverSSH: write error in SshShell readFile(): {str(e)}")
@@ -225,6 +225,7 @@ class SshShell():
 		while True:
 
 			line = self.shell.stdout.readline()
+
 			if len(line) == 0: #EOF i.e. error
 				if len(viewToShell) < 2: #i.e. this is the only or last file being opened at the same time
 					sublime.error_message(makeErrorText(None, self.retCode, f"Unable to communicate with the server (file read)"))
@@ -234,11 +235,12 @@ class SshShell():
 				lines.insert(0, b"\n")
 				break
 
-			lines.append(line)
-			if lines[-1][:-1] == seekingString:
+			if line[:-1] == seekingString:
 				break;
 
-		return b"".join(lines[:-1])[:-1] #remove \n added by echo
+			lines.append(line)
+
+		return b"".join(lines)[:-1] #remove \n added by echo
 
 	def cd(self, path):
 
@@ -249,7 +251,7 @@ class SshShell():
 		 * But until then, here's cd with error checking.
 		"""
 
-		ret = self.runCmd(f"cd {shlex.quote(path)} 2>&1; echo $?")
+		ret = self.runCmd(f"cd -- {shlex.quote(path)} 2>&1; echo $?")
 		return ret[-1] == "0" or (int(ret[-1]), "\n".join(ret[:-1]))
 
 	def close(self, timeout=None):
@@ -501,7 +503,7 @@ class newInputHandler(sublime_plugin.TextInputHandler):
 
 	def fileExists(self, text):
 
-		return len(self.ssh.runCmd("/bin/ls -d " + shlex.quote(text))) > 0
+		return len(self.ssh.runCmd("/bin/ls -d -- " + shlex.quote(text))) > 0
 
 	#gray placeholder text
 	def placeholder(self):
@@ -552,7 +554,7 @@ class newInputHandler(sublime_plugin.TextInputHandler):
 
 		#make the folders
 		if len(folders) > 0:
-			self.ssh.runCmd("mkdir -p " + shlex.quote(folders))
+			self.ssh.runCmd("mkdir -p -- " + shlex.quote(folders))
 			self.argz["path"].extend([folder + "/" for folder in path[:-1]]) #add the new folders to the path
 
 		#open the file
@@ -587,6 +589,7 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 		FILE = (sublime.KindId.COLOR_YELLOWISH, "f", "")
 		FOLDER = (sublime.KindId.COLOR_CYANISH, "F", "")
 		ACTION = (sublime.KindId.COLOR_PURPLISH, "-", "")
+		CONFUSED = (sublime.KindId.COLOR_ORANGISH, "?", "")
 		ERROR = (sublime.KindId.COLOR_REDISH, "!", "")
 
 	#ListInputItem value must be a sublime.Value so this class helps store InputHandlers in the ListInputItem
@@ -644,7 +647,10 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 		for i, fileInfo in enumerate(files):
 
 			fileInfo = fileInfo.split(maxsplit=6) #perms, links, bytes, dt1, dt2, dt3, name; requires LC_TIME=POSIX
-			if len(fileInfo) != 7:
+			lsConfused = False
+			if len(fileInfo) == 5 and fileInfo[1] == fileInfo[2] == fileInfo[3] == "?":
+				lsConfused = True
+			elif len(fileInfo) != 7:
 				if not self.error:
 					print(f"OpenFileOverSSH: Unrecognized ls output (partial):\n{chr(10).join([file for file in files if isinstance(file, str)])}") #char(10) is \n cause can't use a \ in an f string expr
 				self.error = f"Unrecognized file info (skipping): {files[i]} : {fileInfo}"
@@ -653,20 +659,29 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 
 			file = fileInfo[-1]
 			isFolder = self.isFolder(file)
-			if isFolder:
+
+			if isFolder: #folder
 				try:
 					size = int(fileInfo[1]) - 2 #number of sub-directories
 				except ValueError:
-					size = ""
-			else:
+					size = "?"
+
+				kind = self.Kind.FOLDER
+
+			else: #file
 				try:
 					size = self.prettySize(int(fileInfo[2]))
 				except ValueError:
 					size = fileInfo[2]
 
+				kind = self.Kind.FILE
 				hasAFile = True
 
-			files[i] = sublime.ListInputItem(file, file, annotation=f"->{size}" if isFolder else size, kind=self.Kind.FOLDER if isFolder else self.Kind.FILE)
+			if lsConfused: #confused e.g. link with deleted source (will trigger the file branch above)
+				kind = self.Kind.CONFUSED
+
+			files[i] = sublime.ListInputItem(file, file, annotation=f"->{size}" if isFolder else size, kind=kind)
+
 
 		if hasAFile:
 			files.append(sublime.ListInputItem("*", self.Action.GLOB, annotation="Pattern", kind=self.Kind.ACTION))
@@ -810,7 +825,7 @@ class openFileOverSshTextCommand(sublime_plugin.TextCommand):
 			del viewToShell[self.view.id()] #remove ref so the shell can close
 
 		else:
-			p = subprocess.Popen(["ssh", *getSshArgs(), self.view.settings().get("ssh_server"), "cat " + shlex.quote(self.view.settings().get("ssh_path"))], stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=getStartupInfo())
+			p = subprocess.Popen(["ssh", *getSshArgs(), self.view.settings().get("ssh_server"), "cat -- " + shlex.quote(self.view.settings().get("ssh_path"))], stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=getStartupInfo())
 			txt, err = p.communicate()
 
 			if p.returncode != 0 and not (p.returncode == 1 and b"No such file or directory" in err): #ok to open a non existent file

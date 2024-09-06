@@ -57,7 +57,7 @@ The file transferring is done using Popen's stdin and stdout to ssh, not scp.
 The file selection is done by opening an ssh connection after the server is input and `ls` is used to populate the folder/file list on demand.
 
 The only requirements of this plugin are the command `ssh` (which preferably supports OpenSSH config options) on the local machine and and a POSIX compliant shell on the remote machine.
-In particular, the remote machine must support the POSIX `ls`, `cat`, redirection (`>`), globing (`*`) and `grep` (to use \* to open files matching a pattern), and `mkdir` (to use _New_ to create folders).
+In particular, the remote machine must support the POSIX `cd`, `ls`, `printf`, `cat`, redirection (`>`), globing (`*`) and `grep` (to use \* to open files matching a pattern), and `mkdir` (to use _New_ to create folders).
 
 ## Settings
 Open the settings file with one of these options.
