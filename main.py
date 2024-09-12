@@ -24,7 +24,7 @@ from functools import singledispatch
  * The middle of this file has the Input Pallet stuff which is best read starting with the serverInputHandler and then the pathInputHandler.
  * The other InputHandlers are for the extra actions (glob and new).
  *
- * The top of this file includes ssh and popen args including the multiplexing information.
+ * The top of this file includes ssh and popen args which include the multiplexing information.
  * The custom SshShell class below those functions handles the Input Pallet's persistent ssh connection.
 """
 
@@ -52,7 +52,7 @@ def getSshArgs():
 
 	settings = sublime.load_settings(SETTINGS_FILE)
 
-	args = ["-T"] #Non-interactive mode. While non-interactive will be the default, we'll get a unable to allocate tty error message without this
+	args = ["-T"] #Non-interactive mode. While non-interactive will be the default, we'll get an unable to allocate tty error message without this
 
 	if not settings.get("useOpenSshConfigArgs", True):
 		return args
@@ -93,6 +93,11 @@ def getSshArgs():
 		args.extend(["-o", "ControlPath=~/.ssh/SOFOS_cm-%C", "-o", "ControlMaster=auto", "-o", f"ControlPersist={persist}"])
 
 	return args
+
+def pathChecking():
+
+	pref = sublime.load_settings(SETTINGS_FILE).get("pathChecking")
+	return pref if pref != None else True
 
 #makes an error string for an ssh error. Uses the new single-dispatch (overload) functions to accept string or bytes
 @singledispatch
@@ -160,13 +165,13 @@ class SshShell():
 			if self.isAlive(): #ensure the process is dead (in case we got here through ret being False); this is needed because isAlive is used to check for errors
 				self.close(timeout=0.25)
 
+	@staticmethod
+	def quote(str):  #shlex.quote but an empty string stays empty
+		return str and shlex.quote(str)
+
 	@property
 	def retCode(self):
 		return self.shell.returncode
-
-	@staticmethod
-	def trimNewLine(str):
-		return str.rstrip(b"\n").rstrip(b"\r");
 
 	@classmethod
 	def getSeekingString(cls):
@@ -176,14 +181,15 @@ class SshShell():
 	def isAlive(self):
 		return self.shell.poll() == None
 
-	def runCmd(self, cmd="", retErr=False): #set retErr to True to return False on error instead of displaying error dialogs
+	def runCmd(self, cmd="", includeExitCode=False, *, retErr=False): #set retErr to True to return False on ssh error instead of displaying error dialogs
 
 		if cmd != "":
 			cmd += "; "
-		cmd = cmd.encode()
+		if includeExitCode:
+			cmd += "printf \"$?\\n\"; "
 		seekingString = self.getSeekingString()
 		try:
-			self.shell.stdin.write(cmd + b"printf '" + seekingString + b"\\n'\n")
+			self.shell.stdin.write(cmd.encode() + b"printf '" + seekingString + b"\\n'\n")
 			self.shell.stdin.flush()
 		except (BrokenPipeError, OSError) as e: #Will catch closed pipe errors if ssh has terminated (BrokenPipeError on unix, OSError EINVAL on windows)
 			if retErr:
@@ -196,22 +202,25 @@ class SshShell():
 		while True:
 
 			line = self.shell.stdout.readline()
+
 			if len(line) == 0: #EOF i.e. error
 				if retErr:
 					return False
 				sublime.error_message(makeErrorText(None, self.retCode, f"Unable to communicate with the server (read)"))
+				if includeExitCode:
+					lines.append(255) #return ssh error exit code if needed
 				break
 
-			lines.append(self.trimNewLine(line))
-			if lines[-1] == seekingString:
+			if line[:-1] == seekingString:
 				break;
 
-		return [x.decode() for x in lines[:-1]]
+			lines.append(line.rstrip(b"\n").decode())
+
+		return (lines[:-1], int(lines[-1])) if includeExitCode else lines
 
 	def readFile(self, filePath):
 
-		filePath = ("~/" if filePath[0] != "/" else "") + shlex.quote(filePath) #if filePath doesn't start with a /, then its assumed filePath is relative to ~, because the current directory can be anywhere
-		filePath = filePath.encode()
+		filePath = shlex.quote(filePath).encode()
 		seekingString = self.getSeekingString()
 		try:
 			self.shell.stdin.write(b"cat -- " + filePath + b"; printf '\\n" + seekingString + b"\\n'\n") #need the leading \n so seeking string is on its own line
@@ -240,19 +249,7 @@ class SshShell():
 
 			lines.append(line)
 
-		return b"".join(lines)[:-1] #remove \n added by echo
-
-	def cd(self, path):
-
-		"""
-		 * This function runs cd and checks for success. Returns True on success, (retCode, errorStr) on failure
-		 * Ideally (and hopefully eventually) stdErr and exit codes will be available with runCmd
-		 *     which will probably be incorporated into an asyncio update.
-		 * But until then, here's cd with error checking.
-		"""
-
-		ret = self.runCmd(f"cd -- {shlex.quote(path)} 2>&1; echo $?")
-		return ret[-1] == "0" or (int(ret[-1]), "\n".join(ret[:-1]))
+		return b"".join(lines)[:-1] #remove \n added by printf
 
 	def close(self, timeout=None):
 
@@ -304,6 +301,7 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 
 		self.argz = argz
 		self.ssh = None
+		self.settings = sublime.load_settings(SETTINGS_FILE)
 
 	@staticmethod
 	def checkSyntax(text): #false (0): invalid, 1: user/server, 2: server, 3: folder path, 4: file path
@@ -328,7 +326,7 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 	#previous value
 	def initial_text(self):
 
-		return sublime.load_settings(SETTINGS_FILE).get("server", "")
+		return self.settings.get("server", "")
 
 	#syntax check
 	def preview(self, text):
@@ -366,12 +364,23 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 			sublime.error_message(makeErrorText(self.ssh.error, self.ssh.retCode, f"Could not connect to {server}"))
 			return False
 
-		if type == 3:
+		if type == 3 and pathChecking():
 
 			path = text[text.index(":") + 1:]
-			ret = self.ssh.cd(path)
-			if ret != True:
-				sublime.error_message(makeErrorText(ret[1], ret[0], f"Unable to access {path}"))
+			echoCode = "printf \"$?\\n\""
+			[e, d], x = self.ssh.runCmd(f"test -e {path.rstrip('/')}; {echoCode}; test -d {path}; {echoCode}; test -x {path}", True)
+
+			if e == "1": #greater than 1 means test errored
+				msg = "No such file or directory"
+			elif d == "1":
+				msg = "Not a directory"
+			elif x == 1:
+				msg = "Permission denied"
+			else:
+				msg = None
+
+			if msg:
+				sublime.error_message(f"Unable to access (open) '{path}'\n({msg})")
 				return False
 
 		return True
@@ -379,7 +388,7 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 	#save value
 	def confirm(self, text):
 
-		sublime.load_settings(SETTINGS_FILE).set("server", text)
+		self.settings.set("server", text)
 		sublime.save_settings(SETTINGS_FILE)
 
 		self.argz["server"] = text[:text.index(":")]
@@ -407,6 +416,7 @@ class globInputHandler(sublime_plugin.TextInputHandler):
 
 		self.argz = argz
 		self.ssh = argz["sshShell"]
+		self.settings = sublime.load_settings(SETTINGS_FILE)
 
 	@staticmethod
 	def isSyntaxOk(text):
@@ -417,11 +427,14 @@ class globInputHandler(sublime_plugin.TextInputHandler):
 			if not "*" in glob:
 				return False #every space-separated pattern must have a *
 
-		return len(glob) > 0 #must be at least one pattern
+		return True
 
-	def getMatchingFiles(self, text):
+	def getMatchingPaths(self, text):
 
-		return self.ssh.runCmd(f"/bin/ls -1Lpd -- {text} | grep -v /$")
+		path = self.ssh.quote("".join(self.argz["path"][:-1]))
+		globs = [path + glob for glob in text.split()]
+
+		return [path for path in self.ssh.runCmd(f"/bin/ls -1Lpd -- {' '.join(globs)}") if not path.endswith("/")] #will return full paths
 
 	#gray placeholder text
 	def placeholder(self):
@@ -431,7 +444,7 @@ class globInputHandler(sublime_plugin.TextInputHandler):
 	#previous value
 	def initial_text(self):
 
-		return sublime.load_settings(SETTINGS_FILE).get("glob", "")
+		return self.settings.get("glob", "")
 
 	#syntax check
 	def preview(self, text):
@@ -446,7 +459,7 @@ class globInputHandler(sublime_plugin.TextInputHandler):
 
 		if self.isSyntaxOk(text):
 
-			if len(self.getMatchingFiles(text)) > 0:
+			if len(self.getMatchingPaths(text)) > 0:
 				return True
 
 			sublime.error_message("No files were found matching the pattern{} '{}'".format("s" if len(text.split(" ")) > 1 else "", text)) #the dialog looks ugly, but I can't think of a better way
@@ -456,12 +469,11 @@ class globInputHandler(sublime_plugin.TextInputHandler):
 	#update values
 	def confirm(self, text):
 
-		settings = sublime.load_settings(SETTINGS_FILE)
-		settings.set("path", self.argz["path"])
-		settings.set("glob", text)
+		self.settings.set("path", self.argz["path"])
+		self.settings.set("glob", text)
 		sublime.save_settings(SETTINGS_FILE)
 
-		self.argz["paths"] = ["".join(self.argz["path"][:-1] + [file]) for file in self.getMatchingFiles(text)]
+		self.argz["paths"] = self.getMatchingPaths(text)
 
 	#pop()
 	def cancel(self):
@@ -482,6 +494,7 @@ class newInputHandler(sublime_plugin.TextInputHandler):
 
 		self.argz = argz
 		self.ssh = argz["sshShell"]
+		self.settings = sublime.load_settings(SETTINGS_FILE)
 
 	@staticmethod
 	def splitPath(text): #returns (path, file, folders)
@@ -491,19 +504,20 @@ class newInputHandler(sublime_plugin.TextInputHandler):
 
 		path = text.split("/")
 		file = path[-1]
+		folders = path[:-1]
 
-		if "" in path[:-1]: #disallow multiple or initial slashes
+		if "" in folders: #disallow multiple or initial slashes
 			return (None, file, None)
 
-		folders = "/".join(path[:-1])
-		if len(folders) > 0:
-			folders += "/"
+		path = [folder + "/" for folder in folders] + [file]
+		folders = "".join(path[:-1])
 
 		return (path, file, folders)
 
-	def fileExists(self, text):
+	def fileExists(self, file):
 
-		return len(self.ssh.runCmd("/bin/ls -d -- " + shlex.quote(text))) > 0
+		path = self.ssh.quote("".join(self.argz["path"][:-1]) + file)
+		return len(self.ssh.runCmd("/bin/ls -d -- " + path)) > 0
 
 	#gray placeholder text
 	def placeholder(self):
@@ -536,7 +550,7 @@ class newInputHandler(sublime_plugin.TextInputHandler):
 				return True
 
 			#It technically doesn't matter if the file/folder already exists cause it'll get opened correctly; but since the user is expecting to make a new file/folder I'll let them know.
-			sublime.error_message(f"The file/folder '{path[0]}' already exists.")
+			sublime.error_message(f"The file/folder {{{path[0]}}} already exists.")
 
 		return False
 
@@ -551,19 +565,20 @@ class newInputHandler(sublime_plugin.TextInputHandler):
 		path, file, folders = self.splitPath(text)
 
 		self.argz["path"].pop() #remove the new file that got us here
+		curPath = "".join(self.argz["path"])
 
 		#make the folders
 		if len(folders) > 0:
-			self.ssh.runCmd("mkdir -p -- " + shlex.quote(folders))
-			self.argz["path"].extend([folder + "/" for folder in path[:-1]]) #add the new folders to the path
+			self.ssh.runCmd("mkdir -p -- " + self.ssh.quote(curPath + folders))
+			self.argz["path"].extend(path[:-1]) #add the new folders to the path
 
 		#open the file
 		if len(file) > 0:
 			self.argz["path"].append(pathInputHandler.Action.NEW) #make it look like the user selected new in the new (or old) folder(s)
-			self.argz["paths"] = ["".join(self.argz["path"][:-1]) + file]
-			sublime.load_settings(SETTINGS_FILE).set("path", self.argz["path"])
+			self.settings.set("path", self.argz["path"])
+			self.argz["paths"] = [curPath + folders + file]
 		else:
-			sublime.load_settings(SETTINGS_FILE).set("path", self.argz["path"]) #set the previous selection(s) to the new folders
+			self.settings.set("path", self.argz["path"]) #set the previous selection(s) to the new folders
 			for i in range(len(path[:-1])): #remove the new folders in the current path
 				self.argz["path"].pop()
 
@@ -640,23 +655,52 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 	#ls, actions, and initial selection
 	def list_items(self):
 
-		files = self.ssh.runCmd("/bin/ls -1Lp -lgo")[1:] #skip the total line
-		hasAFile = False
+		#setup
+		path = self.ssh.quote("".join(self.argz["path"]))
+		cmd = f"/bin/ls -1Lp -lgo -- {path}"
+		files, retCode = self.ssh.runCmd(cmd, True)
+		files = files[1:] #skip the total line
+		items = []
+		hasFile = False
 		self.error = None
 
-		for i, fileInfo in enumerate(files):
+		#check ls
+		if retCode != 0 and len(files) == 0: #ls can fail on one file, return a failed code, and list the other files normally. Usually caught by lsConfused logic
 
-			fileInfo = fileInfo.split(maxsplit=6) #perms, links, bytes, dt1, dt2, dt3, name; requires LC_TIME=POSIX
+			self.error = "\n".join(self.ssh.runCmd(f"{cmd} 2>&1"))
+
+			msg = f"ERROR: Failed to list files in {path} : "
+			lower = self.error.lower()
+			if "not a directory" in lower:
+				msg += "Not a directory"
+			elif "no such file or directory" in lower:
+				msg += "No such file or directory"
+			elif "permission denied" in lower:
+				msg += "Permission denied"
+			else:
+				msg += "Unrecognized error"
+
+			self.error = f"Exit code {retCode}; " + self.error
+			return [sublime.ListInputItem(msg, None, annotation="Error", kind=self.Kind.ERROR)]
+
+		#do
+		for file in files:
+
+			#split
+			fileInfo = file.split(maxsplit=6) #perms, links, bytes, dt1, dt2, dt3, name; requires LC_TIME=POSIX
 			lsConfused = False
+
+			#check
 			if len(fileInfo) == 5 and fileInfo[1] == fileInfo[2] == fileInfo[3] == "?":
 				lsConfused = True
 			elif len(fileInfo) != 7:
 				if not self.error:
-					print(f"OpenFileOverSSH: Unrecognized ls output (partial):\n{chr(10).join([file for file in files if isinstance(file, str)])}") #char(10) is \n cause can't use a \ in an f string expr
-				self.error = f"Unrecognized file info (skipping): {files[i]} : {fileInfo}"
+					print(f"OpenFileOverSSH: Unrecognized ls output:\n{chr(10).join(files)}") #char(10) is \n cause can't use a \ in an f string expr
+				self.error = f"Unrecognized file info (skipping): {file} : {fileInfo}"
 				print(f"OpenFileOverSSH: {self.error}")
+				continue
 
-
+			#parse
 			file = fileInfo[-1]
 			isFolder = self.isFolder(file)
 
@@ -675,30 +719,32 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 					size = fileInfo[2]
 
 				kind = self.Kind.FILE
-				hasAFile = True
+				hasFile = True
 
 			if lsConfused: #confused e.g. link with deleted source (will trigger the file branch above)
 				kind = self.Kind.CONFUSED
 
-			files[i] = sublime.ListInputItem(file, file, annotation=f"->{size}" if isFolder else size, kind=kind)
+			#item
+			items.append(sublime.ListInputItem(file, file, annotation=f"->{size}" if isFolder else size, kind=kind))
 
 
-		if hasAFile:
-			files.append(sublime.ListInputItem("*", self.Action.GLOB, annotation="Pattern", kind=self.Kind.ACTION))
-
-		files.append(sublime.ListInputItem("New", self.Action.NEW, annotation="Create", kind=self.Kind.ACTION))
+		#actions and warnings
+		if hasFile:
+			items.append(sublime.ListInputItem("*", self.Action.GLOB, annotation="Pattern", kind=self.Kind.ACTION))
+		items.append(sublime.ListInputItem("New", self.Action.NEW, annotation="Create", kind=self.Kind.ACTION))
 
 		if self.error:
-			files.insert(0, sublime.ListInputItem("WARNING: A Parsing Error Occurred and some Entries are Missing or Wrong", None, annotation="Warning", kind=self.Kind.ERROR))
+			items.insert(0, sublime.ListInputItem("WARNING: A Parsing Error Occurred and some Entries are Missing or Wrong", None, annotation="Warning", kind=self.Kind.ERROR))
 
 
+		#default selection
 		try:
-			files = (files, next(i for i,f in enumerate(files) if f.value == self.settings.get("path", [])[len(self.argz["path"])])) #default selection
-		except (StopIteration, IndexError): #StopIteration if no value from the generator, IndexError if the settings path isn't long enough
+			items = (items, next(j for j,i in enumerate(items) if i.value == self.settings["path"][len(self.argz["path"])]))
+		except (KeyError, IndexError, StopIteration): #KeyError for "path", IndexError for [len()], StopIteration for no matching value
 			pass
 
 
-		return files
+		return items
 
 	#gray placeholder text
 	def placeholder(self):
@@ -717,21 +763,24 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 		else:
 			return "Open File"
 
-	#check folder
+	#check file/folder
 	def validate(self, value):
 
 		if value == None:
 			return False
 
-		if self.isPath(value) and self.isFolder(value):
-			ret = self.ssh.cd(value)
-			if ret != True:
-				sublime.error_message(makeErrorText(ret[1], ret[0], f"Unable to access {value}"))
+		if self.isPath(value) and pathChecking():
+
+			path = self.ssh.quote("".join(self.argz["path"]) + value)
+			_, code = self.ssh.runCmd(f"test -{'x' if self.isFolder(value) else 'r'} {path}", True)
+
+			if code == 1: #greater than 1 means test errored
+				sublime.error_message(f"Unable to access ({'open' if self.isFolder(value) else 'read'}) '{value}'\n(Permission Denied)")
 				return False
 
 		return True
 
-	#update values
+	#push/update
 	def confirm(self, value):
 
 		self.argz["path"].append(value)
@@ -742,13 +791,11 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 			sublime.save_settings(SETTINGS_FILE)
 			self.argz["paths"] = ["".join(self.argz["path"])]
 
-	#cd ..
+	#pop
 	def cancel(self):
 
 		try:
 			path = self.argz["path"].pop()
-			if self.isPath(path) and self.isFolder(path):
-				self.ssh.runCmd("cd ..")
 		except IndexError: #Nothing to pop
 			pass
 

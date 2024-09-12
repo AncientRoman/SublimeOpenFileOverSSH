@@ -57,7 +57,7 @@ The file transferring is done using Popen's stdin and stdout to ssh, not scp.
 The file selection is done by opening an ssh connection after the server is input and `ls` is used to populate the folder/file list on demand.
 
 The only requirements of this plugin are the command `ssh` (which preferably supports OpenSSH config options) on the local machine and and a POSIX compliant shell on the remote machine.
-In particular, the remote machine must support the POSIX `cd`, `ls`, `printf`, `cat`, redirection (`>`), globing (`*`) and `grep` (to use \* to open files matching a pattern), and `mkdir` (to use _New_ to create folders).
+In particular, the remote machine should support the POSIX `ls`, `printf`, `cat`, redirection (`>`), `test` (for [Path Checking](#path-checking)), globing (`*`) (to use \* to open files matching a pattern), and `mkdir` (to use _New_ to create folders). However, if a file is opened without triggering the picker (see [Advanced Usage](#advanced)) only `cat` and `>` are needed.
 
 ## Settings
 Open the settings file with one of these options.
@@ -85,6 +85,11 @@ This settings accepts yes, no, accept-new, or null most of which correspond to s
 `yes` throws an error if a key does not exist or match.<br>
 `no` does not check or save keys.<br>
 `accept-new` saves new keys and only errors if a previously saved key has changed.
+
+#### Path Checking
+By default, remote files and folders are checked with the `test` command before they are opened.<br>
+You can set `pathChecking` to `false` to disable this extra check.<br>
+If path checking is disabled, any errors will occur after a path is selected instead of before.
 
 
 ### Key Bindings

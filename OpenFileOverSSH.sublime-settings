@@ -24,7 +24,7 @@
 	//"timeout": 7,
 
 
-	/* SSH Host Key Checking: checking host keys against the known_hosts file.
+	/* SSH Host Key Checking: checks host keys against the known_hosts file.
 	 * Accepts some ssh StrictHostKeyChecking values (yes, no, accept-new) or null.
 	 * The default is null which uses ssh's BatchMode default (which is most likely yes).
 	 * yes will always check keys and throws an error if a key does not exist or match.
@@ -35,6 +35,15 @@
 
 
 	/*
+	 * File Browser Path Checking: shows errors before selection
+	 * The file browser checks folders and files with the POSIX `test` command before they are opened.
+	 * Set to false to disable this checking (for slow connections for example).
+	 * When this setting is false, error messages will occur after a path is opened instead of before a path is selected.
+	*/
+	//"pathChecking": true,
+
+
+	/*
 	 * OpenSSH-Type Configuration
 	 * For advanced users only.
 	 * This plugin assumes the `ssh` command is OpenSSH.
@@ -42,7 +51,7 @@
 	 * However, if for some reason `ssh` is not OpenSSH and you would still like to use this plugin,
 	 *     you can set this setting to false and all ssh config options will be removed.
 	 * If you do this:
-	 *     all the above settings will be ignored,
+	 *     all the above ssh settings will be ignored,
 	 *     password-less login checking and non-interactive settings will be disabled,
 	 *     most error checking won't work.
 	 * Use at your own risk.
