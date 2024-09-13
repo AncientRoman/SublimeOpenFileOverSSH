@@ -625,7 +625,7 @@ class optionsInputHandler(sublime_plugin.ListInputHandler):
 		PCHECKING = (
 			"Toggle Path Checking",
 			"error time",
-			"/",
+			"✓",
 			lambda argz: f"Show Errors {'After' if argz['pathChecking'] else 'Before'} Selection",
 			"togglePathChecking"
 		)
@@ -683,7 +683,6 @@ class optionsInputHandler(sublime_plugin.ListInputHandler):
 	def next_input(self, args):
 
 		return sublime_plugin.BackInputHandler()
-
 
 #input pallet path input
 class pathInputHandler(sublime_plugin.ListInputHandler):
@@ -826,10 +825,12 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 
 
 		#actions and warnings
+		if not self.argz["path"]:
+			items.append(sublime.ListInputItem("/", "/", annotation="Root Dir", kind=self.Kind.ACTION))
 		if hasFile:
 			items.append(sublime.ListInputItem("*", self.Action.GLOB, annotation="Pattern", kind=self.Kind.ACTION))
 		items.append(sublime.ListInputItem("New", self.Action.NEW, annotation="Create", kind=self.Kind.ACTION))
-		items.append(sublime.ListInputItem("Options", self.Action.OPTIONS, annotation="Session Options", kind=self.Kind.ACTION))
+		items.append(sublime.ListInputItem("Options", self.Action.OPTIONS, annotation="Session Prefs", kind=self.Kind.ACTION))
 
 		if self.error:
 			items.insert(0, sublime.ListInputItem("WARNING: A Parsing Error Occurred and some Entries are Missing or Wrong", None, annotation="Warning", kind=self.Kind.ERROR))
