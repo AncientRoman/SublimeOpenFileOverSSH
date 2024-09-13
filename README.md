@@ -34,8 +34,9 @@ Once triggered, input the server details and browse/open remote files as follows
 
 The list input also contains various actions related to opening files.
 
-* Select the star (\*) option to enter a pattern like `*.c *.h`
-* Select the _New_ option to create new folders and open new files
+* Select the star (\*) to enter a pattern like `*.c *.h`
+* Select _New_ to create new folders and open new files
+* Select _Options_ to edit the current file browser session's settings (See [Settings](#settings) for persistent changes)
 
 #### Advanced
 The server input can also accept paths similar to scp.
@@ -65,6 +66,10 @@ Open the settings file with one of these options.
 * Use the menu item _Preferences > Package Settings > Open File Over SSH > Settings_
 * Run the command pallet command _Preferences: Open File Over SSH Settings_
 * Open the file _Packages > User > OpenFileOverSSH.sublime-settings_
+
+#### Hidden Files
+Use the `showHiddenFiles` setting to show/hide hidden files in the file browser.<br>
+By default, hidden files are not shown.
 
 #### Multiplexing
 Ssh's multiplexing feature is used to speed up connection and authentication when browsing and saving files in short succession.<br>

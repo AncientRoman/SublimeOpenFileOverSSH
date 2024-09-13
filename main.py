@@ -22,7 +22,7 @@ from functools import singledispatch
  * The ViewEventListener handles saving and modifying the view while the TextCommand handles loading the view's contents.
  *
  * The middle of this file has the Input Pallet stuff which is best read starting with the serverInputHandler and then the pathInputHandler.
- * The other InputHandlers are for the extra actions (glob and new).
+ * The other InputHandlers are for the extra actions (glob, new, and options).
  *
  * The top of this file includes ssh and popen args which include the multiplexing information.
  * The custom SshShell class below those functions handles the Input Pallet's persistent ssh connection.
@@ -93,11 +93,6 @@ def getSshArgs():
 		args.extend(["-o", "ControlPath=~/.ssh/SOFOS_cm-%C", "-o", "ControlMaster=auto", "-o", f"ControlPersist={persist}"])
 
 	return args
-
-def pathChecking():
-
-	pref = sublime.load_settings(SETTINGS_FILE).get("pathChecking")
-	return pref if pref != None else True
 
 #makes an error string for an ssh error. Uses the new single-dispatch (overload) functions to accept string or bytes
 @singledispatch
@@ -303,6 +298,10 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 		self.ssh = None
 		self.settings = sublime.load_settings(SETTINGS_FILE)
 
+		if not "pathChecking" in argz:
+			pref = self.settings.get("pathChecking")
+			argz["pathChecking"] = pref if pref != None else True
+
 	@staticmethod
 	def checkSyntax(text): #false (0): invalid, 1: user/server, 2: server, 3: folder path, 4: file path
 
@@ -364,7 +363,7 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 			sublime.error_message(makeErrorText(self.ssh.error, self.ssh.retCode, f"Could not connect to {server}"))
 			return False
 
-		if type == 3 and pathChecking():
+		if type == 3 and self.argz["pathChecking"]:
 
 			path = text[text.index(":") + 1:]
 			echoCode = "printf \"$?\\n\""
@@ -395,6 +394,7 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 		self.argz["sshShell"] = self.ssh
 		if text[-1] != ":": #i.e. type 3 or 4
 			self.argz["path" if text[-1] == "/" else "paths"] = [text[text.index(":") + 1:]]
+		self.argz["hasStartDir"] = text[-1] == "/" #need to know if type 3 for ../ handling
 
 	#close ssh
 	def cancel(self):
@@ -546,11 +546,12 @@ class newInputHandler(sublime_plugin.TextInputHandler):
 		path = self.splitPath(text)[0]
 		if path != None:
 
-			if not self.fileExists(path[0]):
+			path = path[0].rstrip("/")
+			if not self.fileExists(path):
 				return True
 
 			#It technically doesn't matter if the file/folder already exists cause it'll get opened correctly; but since the user is expecting to make a new file/folder I'll let them know.
-			sublime.error_message(f"The file/folder {{{path[0]}}} already exists.")
+			sublime.error_message(f"The file/folder {{{path}}} already exists.")
 
 		return False
 
@@ -596,8 +597,98 @@ class newInputHandler(sublime_plugin.TextInputHandler):
 
 		return None if len(file) > 0 else sublime_plugin.BackInputHandler()
 
+#input pallet action session options
+class optionsInputHandler(sublime_plugin.ListInputHandler):
+
+	"""
+	 * This seems like overkill for toggling hidden files (it's only real use) but it has to be something like this.
+	 * Toggling hidden files has to trigger another call to list_items() which Sublime does not provide an api for.
+	 * list_items() is only called when a handler is first shown or when the next handler is popped off the stack.
+	 * So this options handler will be that handler that is popped off the stack.
+	 *
+	 * Another option would be to push a duplicate listInputHandler on the stack when hidden files are toggled.
+	 * Unfortunately this messes up the handler stack with a duplicate handler that causes issues when popping particularly with the .. directory.
+	"""
+
+	class Option(str, Enum):
+
+		#action has to be a string function name because optionsInputHandler doesn't exist as a type yet.
+		#...forward declaration issues. Literally the one bad thing about python...rip
+
+		HIDDEN = (
+			"Toggle Hidden Files",
+			"dot files",
+			".",
+			lambda argz: f"{'Hide' if argz['hiddenFiles'] else 'Show'} Hidden Files (dot files)",
+			"toggleHiddenFiles"
+		)
+		PCHECKING = (
+			"Toggle Path Checking",
+			"error time",
+			"/",
+			lambda argz: f"Show Errors {'After' if argz['pathChecking'] else 'Before'} Selection",
+			"togglePathChecking"
+		)
+
+		def __new__(cls, text, annotation, kLetter, preview, action):
+
+			obj = str.__new__(cls, text)
+			obj._value_ = text
+			obj.annotation = annotation
+			obj.kLetter = kLetter
+			obj.preview = preview
+			obj.action = action
+			return obj
+
+
+	@staticmethod
+	def toggleHiddenFiles(argz):
+		argz["hiddenFiles"] = not argz["hiddenFiles"]
+
+	@staticmethod
+	def togglePathChecking(argz):
+		argz["pathChecking"] = not argz["pathChecking"]
+
+
+	def __init__(self, argz):
+
+		super().__init__()
+
+		self.argz = argz
+		argz["path"].pop() #remove the edit options that got us here
+
+	#show all Options
+	def list_items(self):
+
+		kColor = pathInputHandler.Kind.ACTION[0]
+		kOther = pathInputHandler.Kind.ACTION[2:]
+
+		return [sublime.ListInputItem(option.value, option.value, annotation=option.annotation, kind=(kColor, option.kLetter) + kOther) for option in self.Option]
+
+	#display preview
+	def preview(self, value):
+
+		preview = self.Option(value).preview
+		return preview(self.argz) if callable(preview) else preview
+
+	#run action
+	def confirm(self, value):
+
+		try:
+			getattr(self, self.Option(value).action)(self.argz)
+		except AttributeError:
+			print(f"OpenFileOverSSH: Bad Option function name: {self.Option(value).action}")
+
+	#pop back
+	def next_input(self, args):
+
+		return sublime_plugin.BackInputHandler()
+
+
 #input pallet path input
 class pathInputHandler(sublime_plugin.ListInputHandler):
+
+	parentDir = "../"
 
 	class Kind(tuple, Enum):
 
@@ -612,6 +703,7 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 
 		GLOB = 1, "Open Multiple Files with a Glob", globInputHandler
 		NEW = 2, "Make a New File or Folder Here", newInputHandler
+		OPTIONS = 3, lambda self: f"Edit Session Options such as {'hiding' if self.argz['hiddenFiles'] else 'showing'} hidden files", optionsInputHandler
 
 		def __new__(cls, val, preview, handler):
 
@@ -626,12 +718,15 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 
 		super().__init__()
 
-		if not "path" in argz:
-			argz["path"] = []
-
 		self.argz = argz
 		self.ssh = argz["sshShell"]
 		self.settings = sublime.load_settings(SETTINGS_FILE)
+
+		if not "path" in argz:
+			argz["path"] = []
+
+		if not "hiddenFiles" in argz:
+			argz["hiddenFiles"] = not not self.settings.get("showHiddenFiles") #convert None to False
 
 	@staticmethod
 	def isPath(value):
@@ -657,7 +752,7 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 
 		#setup
 		path = self.ssh.quote("".join(self.argz["path"]))
-		cmd = f"/bin/ls -1Lp -lgo -- {path}"
+		cmd = f"/bin/ls -1Lp -lgo {'-a' if self.argz['hiddenFiles'] else ''} -- {path}"
 		files, retCode = self.ssh.runCmd(cmd, True)
 		files = files[1:] #skip the total line
 		items = []
@@ -702,6 +797,8 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 
 			#parse
 			file = fileInfo[-1]
+			if file == "./":
+				continue #pointless to select current directory
 			isFolder = self.isFolder(file)
 
 			if isFolder: #folder
@@ -732,6 +829,7 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 		if hasFile:
 			items.append(sublime.ListInputItem("*", self.Action.GLOB, annotation="Pattern", kind=self.Kind.ACTION))
 		items.append(sublime.ListInputItem("New", self.Action.NEW, annotation="Create", kind=self.Kind.ACTION))
+		items.append(sublime.ListInputItem("Options", self.Action.OPTIONS, annotation="Session Options", kind=self.Kind.ACTION))
 
 		if self.error:
 			items.insert(0, sublime.ListInputItem("WARNING: A Parsing Error Occurred and some Entries are Missing or Wrong", None, annotation="Warning", kind=self.Kind.ERROR))
@@ -757,7 +855,8 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 		if value == None:
 			return self.error or "No items found. You can use the New action to create a file."
 		if not self.isPath(value):
-			return self.Action(value).preview
+			preview = self.Action(value).preview
+			return preview(self) if callable(preview) else preview
 		elif self.isFolder(value):
 			return "Enter Folder"
 		else:
@@ -769,7 +868,7 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 		if value == None:
 			return False
 
-		if self.isPath(value) and pathChecking():
+		if self.isPath(value) and self.argz["pathChecking"]:
 
 			path = self.ssh.quote("".join(self.argz["path"]) + value)
 			_, code = self.ssh.runCmd(f"test -{'x' if self.isFolder(value) else 'r'} {path}", True)
@@ -783,7 +882,12 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 	#push/update
 	def confirm(self, value):
 
-		self.argz["path"].append(value)
+		#next_input cannot determine if ../ should BackInputHandler because the path will already be updated, so it'll use self.popped
+		self.popped = value == self.parentDir and len(self.argz["path"]) > self.argz["hasStartDir"] and self.argz["path"][-1] != self.parentDir #if ../ should pop
+		if not self.popped:
+			self.argz["path"].append(value)
+		else:
+			self.argz["path"].pop()
 
 		if self.isPath(value) and not self.isFolder(value):
 			#save path when done as opposed to as we go because this how sublime does it with internal commands
@@ -804,6 +908,8 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 
 		value = args["path"]
 
+		if self.popped:
+			return sublime_plugin.BackInputHandler()
 		if not self.isPath(value):
 			return self.Action(value).handler(self.argz)
 		if self.isFolder(value):

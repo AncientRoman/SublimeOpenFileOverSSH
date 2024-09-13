@@ -4,6 +4,13 @@
 	//Preferences --------------------------------------------------
 
 	/*
+	 * Show Hidden Files
+	 * Whether or not to show hidden files (files beginning with a dot) in the file browser by default.
+	 * You can show hidden files each time within the picker using the Options action; this settings merely controls the default.
+	*/
+	//"showHiddenFiles": false,
+
+	/*
 	 * SSH Multiplexing:
 	 *  speeds up connection and authentication when browsing and saving files in short succession.
 	 * Accepts keep alive (ControlPersist) times in the 120s or 5m formats.
@@ -56,7 +63,7 @@
 	 *     most error checking won't work.
 	 * Use at your own risk.
 	*/
-	//"useOpenSshConfigArgs": true
+	//"useOpenSshConfigArgs": true,
 
 
 
