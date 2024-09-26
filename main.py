@@ -9,7 +9,6 @@ import threading #stderr consuming
 import subprocess #popen
 import sublime_plugin
 from enum import Enum
-from functools import singledispatch
 
 """
  * Hey there!
@@ -95,15 +94,17 @@ def getSshArgs():
 	return args
 
 #makes an error string for an ssh error. Uses the new single-dispatch (overload) functions to accept string or bytes
-@singledispatch
-def makeErrorText(sshStderr, sshRetCode, title):
+def makeErrorText(title, sshRetCode, sshStderr):
+
+	if isinstance(sshStderr, bytes) or isinstance(sshStderr, bytearray):
+		sshStderr = sshStderr.decode()
 
 	error = sshStderr and sshStderr.replace("\r", "").rstrip("\n") #ssh's output to stderr has line endings of CRLF per ssh specs. Remove trailing new line too
-	errType = "ssh" if sshRetCode == 255 or sshRetCode == None else "remote"
+	errType = "ssh" if sshRetCode == 255 or sshRetCode == None else "posix signal" if sshRetCode < 0 else "remote"
 
 	if error:
 		msg = f"{title}.\n\nCode: {sshRetCode} ({errType})\nError: {error}"
-		lower = error.lower()
+		lower = error.casefold()
 		if errType == "ssh":
 			if "host key verification failed" in lower:
 				msg += "\n\nSSH to this server with your terminal to verify the host key or change the hostKeyChecking setting."
@@ -116,11 +117,6 @@ def makeErrorText(sshStderr, sshRetCode, title):
 		return msg
 	else:
 		return f"{title}.\nAn unknown {errType} error occurred.\nError Code: {sshRetCode}"
-
-@makeErrorText.register(bytes)
-@makeErrorText.register(bytearray)
-def _(sshStderr, sshRetCode, title):
-	return makeErrorText(sshStderr.decode(), sshRetCode, title)
 
 
 
@@ -135,23 +131,22 @@ class SshShell():
 	setupCmds = [
 		"export LC_TIME=POSIX" #set ls -l to output a standardized time format
 	]
-	seekingString = b"A random string for seeking"
 
 	def __init__(self, userAndServer):
 
 		self.shell = subprocess.Popen(["ssh", *getSshArgs(), userAndServer], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=getStartupInfo())
-		ret = self.runCmd("; ".join(self.setupCmds), retErr=True) #read past all login information and run the setupCmds; will block until completed or error
+		_, code, _ = self.runCmd("; ".join(self.setupCmds)) #read past all login information and run the setupCmds; will block until completed or error
 
 		"""
 		 * Theoretically if ret is false, isAlive should also be false.
 		 * However on windows this is not always the case.
-		 * For example, when attempting to use multiplexing or on another ssh error (host key, password auth) in windows:
+		 * For example, on initial ssh error (host key, password auth, multiplexing) in windows:
 		 *    ret is false because the read() returned EOF
 		 *    isAlive() is true (because ssh hasn't exited yet??)
 		 *    if this isn't caught, the next write()/flush() will error with broken pipe (which is EINVAL on python windows)
 		 * Leave it up to windows to make code complicated :(
 		"""
-		if self.isAlive() and not ret == False:
+		if self.isAlive() and code != 255:
 			self.thread = threading.Thread(target=self.shell.stderr.read, daemon=True) #consume sterr so a full pipe doesn't block our process
 			self.thread.start()
 			self.error = None
@@ -161,7 +156,7 @@ class SshShell():
 				self.close(timeout=0.25)
 
 	@staticmethod
-	def quote(str):  #shlex.quote but an empty string stays empty
+	def quote(str): #shlex.quote but an empty string stays empty
 		return str and shlex.quote(str)
 
 	@property
@@ -169,82 +164,78 @@ class SshShell():
 		return self.shell.returncode
 
 	@classmethod
-	def getSeekingString(cls):
-
-		return cls.seekingString + ("".join([random.choice(string.ascii_uppercase + string.digits) for _ in range(30)])).encode()
+	def _genSeekingStr(cls):
+		return "A random string for seeking" + ("".join([random.choice(string.ascii_uppercase + string.digits) for _ in range(30)]))
 
 	def isAlive(self):
 		return self.shell.poll() == None
 
-	def runCmd(self, cmd="", includeExitCode=False, *, retErr=False): #set retErr to True to return False on ssh error instead of displaying error dialogs
+	def runCmd(self, cmd, splitLines=True, decode=True, *, throwOnSshErr=False): #returns: (stdout, retCode, stderr)
 
+		"""
+		 * As of right now, stderr will usually be None to indicate unable to read stderr
+		 *
+		 * Until this function can actually return stderr, throwOnSshErr will be available
+		 * When True, this function will display an error message and raise an exception if an Ssh Error (i.e. connection dropped) occurs
+		 * Use this to avoid needing to error check in calling code
+		"""
+
+		#write
+		seekingString = self._genSeekingStr()
 		if cmd != "":
 			cmd += "; "
-		if includeExitCode:
-			cmd += "printf \"$?\\n\"; "
-		seekingString = self.getSeekingString()
+		cmd += f"printf \"\\n$?\\n{seekingString}\\n\"\n" #printf "\n retCode \n seekingStr \n"
+		seekingString = seekingString.encode()
+
 		try:
-			self.shell.stdin.write(cmd.encode() + b"printf '" + seekingString + b"\\n'\n")
+			self.shell.stdin.write(cmd.encode())
 			self.shell.stdin.flush()
-		except (BrokenPipeError, OSError) as e: #Will catch closed pipe errors if ssh has terminated (BrokenPipeError on unix, OSError EINVAL on windows)
-			if retErr:
-				return False
-			sublime.error_message(makeErrorText(str(e), self.retCode, f"Unable to communicate with the server (write)"))
-			raise e
+		except (BrokenPipeError, OSError) as e: #will catch closed pipe errors if ssh has terminated (BrokenPipeError on unix, OSError EINVAL on windows)
 
+			self.shell.poll() #set returncode if its available (on windows its prolly not)
+			if throwOnSshErr:
+				sublime.error_message(makeErrorText("Lost connection to the server (write)", self.retCode or 255, str(e)))
+				raise Exception("Ssh Connection Drop")
+
+			stderr = "Connection lost: " + str(e)
+			return ([] if splitLines else "" if decode else b"", self.retCode or 255, stderr if decode else stderr.encode())
+
+
+		#read
 		lines = []
-
 		while True:
 
 			line = self.shell.stdout.readline()
 
 			if len(line) == 0: #EOF i.e. error
-				if retErr:
-					return False
-				sublime.error_message(makeErrorText(None, self.retCode, f"Unable to communicate with the server (read)"))
-				if includeExitCode:
-					lines.append(255) #return ssh error exit code if needed
-				break
+
+				self.shell.poll()
+				if throwOnSshErr:
+					sublime.error_message(makeErrorText("Lost connection to the server (read)", self.retCode or 255, "Encountered EOF"))
+					raise Exception("Ssh Connection Drop")
+
+				stderr = "Connection lost: encountered EOF during read"
+				return ([] if splitLines else "" if decode else b"", self.retCode or 255, stderr if decode else stderr.encode())
 
 			if line[:-1] == seekingString:
 				break;
 
-			lines.append(line.rstrip(b"\n").decode())
-
-		return (lines[:-1], int(lines[-1])) if includeExitCode else lines
-
-	def readFile(self, filePath):
-
-		filePath = shlex.quote(filePath).encode()
-		seekingString = self.getSeekingString()
-		try:
-			self.shell.stdin.write(b"cat -- " + filePath + b"; printf '\\n" + seekingString + b"\\n'\n") #need the leading \n so seeking string is on its own line
-			self.shell.stdin.flush()
-		except (BrokenPipeError, OSError) as e:
-			print(f"OpenFileOverSSH: write error in SshShell readFile(): {str(e)}")
-			pass #continue because readline() below will return EOF which will trigger the error text
-
-		lines = []
-
-		while True:
-
-			line = self.shell.stdout.readline()
-
-			if len(line) == 0: #EOF i.e. error
-				if len(viewToShell) < 2: #i.e. this is the only or last file being opened at the same time
-					sublime.error_message(makeErrorText(None, self.retCode, f"Unable to communicate with the server (file read)"))
-				#need three lines to always make it past the return slicing
-				lines.insert(0, b"\n")
-				lines.insert(0, b"Warning: an error or connection loss occurred while reading this file (" + filePath + b") from the remote server.\nThis file may be wrong or incomplete.\nDO NOT SAVE THIS FILE unless you are sure it's correct and complete.\nYou may reopen this file to ensure correctness with the `File:Revert` command from the command pallet\n\n")
-				lines.insert(0, b"\n")
-				break
-
-			if line[:-1] == seekingString:
-				break;
-
+			if splitLines:
+				line = line.rstrip(b"\n")
+			if decode:
+				line = line.decode()
 			lines.append(line)
 
-		return b"".join(lines)[:-1] #remove \n added by printf
+
+		#return
+		retCode = int(lines.pop())
+
+		if len(lines[-1]) == (not splitLines): #remove the extra \n added with printf
+			lines.pop()
+		elif not splitLines:
+			lines[-1] = lines[-1][:-1]
+
+		return (lines if splitLines else ("" if decode else b"").join(lines), retCode, None)
 
 	def close(self, timeout=None):
 
@@ -356,18 +347,18 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 			return True
 
 		server = text[:text.index(":")]
-		self.ssh = SshShell(server)
+		ssh = SshShell(server)
 
-		if not self.ssh.isAlive(): #check if not dead
+		if not ssh.isAlive(): #check if not dead
 			#the dialog looks kinda ugly, but I can't think of a better way
-			sublime.error_message(makeErrorText(self.ssh.error, self.ssh.retCode, f"Could not connect to {server}"))
+			sublime.error_message(makeErrorText(f"Could not connect to {server}", ssh.retCode, ssh.error))
 			return False
 
 		if type == 3 and self.argz["pathChecking"]:
 
 			path = text[text.index(":") + 1:]
 			echoCode = "printf \"$?\\n\""
-			[e, d], x = self.ssh.runCmd(f"test -e {path.rstrip('/')}; {echoCode}; test -d {path}; {echoCode}; test -x {path}", True)
+			[e, d], x, _ = ssh.runCmd(f"test -e {path.rstrip('/')}; {echoCode}; test -d {path}; {echoCode}; test -x {path}")
 
 			if e == "1": #greater than 1 means test errored
 				msg = "No such file or directory"
@@ -382,6 +373,7 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 				sublime.error_message(f"Unable to access (open) '{path}'\n({msg})")
 				return False
 
+		self.ssh = ssh #only save if it'll be used
 		return True
 
 	#save value
@@ -434,7 +426,7 @@ class globInputHandler(sublime_plugin.TextInputHandler):
 		path = self.ssh.quote("".join(self.argz["path"][:-1]))
 		globs = [path + glob for glob in text.split()]
 
-		return [path for path in self.ssh.runCmd(f"/bin/ls -1Lpd -- {' '.join(globs)}") if not path.endswith("/")] #will return full paths
+		return [path for path in self.ssh.runCmd(f"/bin/ls -1Lpd -- {' '.join(globs)}", throwOnSshErr=True)[0] if not path.endswith("/")] #will return full paths
 
 	#gray placeholder text
 	def placeholder(self):
@@ -517,7 +509,7 @@ class newInputHandler(sublime_plugin.TextInputHandler):
 	def fileExists(self, file):
 
 		path = self.ssh.quote("".join(self.argz["path"][:-1]) + file)
-		return len(self.ssh.runCmd("/bin/ls -d -- " + path)) > 0
+		return len(self.ssh.runCmd("/bin/ls -d -- " + path, throwOnSshErr=True)[0]) > 0
 
 	#gray placeholder text
 	def placeholder(self):
@@ -570,7 +562,7 @@ class newInputHandler(sublime_plugin.TextInputHandler):
 
 		#make the folders
 		if len(folders) > 0:
-			self.ssh.runCmd("mkdir -p -- " + self.ssh.quote(curPath + folders))
+			self.ssh.runCmd("mkdir -p -- " + self.ssh.quote(curPath + folders), throwOnSshErr=True)
 			self.argz["path"].extend(path[:-1]) #add the new folders to the path
 
 		#open the file
@@ -752,7 +744,7 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 		#setup
 		path = self.ssh.quote("".join(self.argz["path"]))
 		cmd = f"/bin/ls -1Lp -lgo {'-a' if self.argz['hiddenFiles'] else ''} -- {path}"
-		files, retCode = self.ssh.runCmd(cmd, True)
+		files, retCode, err = self.ssh.runCmd(cmd)
 		files = files[1:] #skip the total line
 		items = []
 		hasFile = False
@@ -761,11 +753,14 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 		#check ls
 		if retCode != 0 and len(files) == 0: #ls can fail on one file, return a failed code, and list the other files normally. Usually caught by lsConfused logic
 
-			self.error = "\n".join(self.ssh.runCmd(f"{cmd} 2>&1"))
+			self.error = err or self.ssh.runCmd(f"{cmd} 2>&1", False)[0]
 
-			msg = f"ERROR: Failed to list files in {path} : "
-			lower = self.error.lower()
-			if "not a directory" in lower:
+			msg = f"ERROR: Failed to list files in {path if path else '~'} : "
+			lower = self.error.casefold()
+			if retCode == 255 or retCode < 0:
+				sublime.error_message(makeErrorText("Lost connection to the server", retCode, self.error))
+				msg += "Connection lost"
+			elif "not a directory" in lower:
 				msg += "Not a directory"
 			elif "no such file or directory" in lower:
 				msg += "No such file or directory"
@@ -872,7 +867,7 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 		if self.isPath(value) and self.argz["pathChecking"]:
 
 			path = self.ssh.quote("".join(self.argz["path"]) + value)
-			_, code = self.ssh.runCmd(f"test -{'x' if self.isFolder(value) else 'r'} {path}", True)
+			_, code, _ = self.ssh.runCmd(f"test -{'x' if self.isFolder(value) else 'r'} {path}")
 
 			if code == 1: #greater than 1 means test errored
 				sublime.error_message(f"Unable to access ({'open' if self.isFolder(value) else 'read'}) '{value}'\n(Permission Denied)")
@@ -969,26 +964,47 @@ class sofosCheekyMakeDirtyCommand(sublime_plugin.TextCommand):
 #sets the view's buffer to the remote file's contents
 class openFileOverSshTextCommand(sublime_plugin.TextCommand):
 
-	#an edit object is required for modifying a view/buffer and a text command is the only valid way to get one in sublime text 3
+	#an edit object is required for modifying a view/buffer and a text command is the only valid way to get one in sublime text 3/4
 
 	def run(self, edit):
 
+		cmd = "cat -- " + shlex.quote(self.view.settings().get("ssh_path"))
+		setRO = False
+
+		#read
 		if self.view.id() in viewToShell:
 
-			txt = viewToShell[self.view.id()].readFile(self.view.settings().get("ssh_path"))
+			txt, code, err = viewToShell[self.view.id()].runCmd(cmd, False, False)
+			if code != 0 and err == None:
+				err, _, _ = viewToShell[self.view.id()].runCmd(f"{cmd} 2>&1", False, False)
 			del viewToShell[self.view.id()] #remove ref so the shell can close
 
 		else:
-			p = subprocess.Popen(["ssh", *getSshArgs(), self.view.settings().get("ssh_server"), "cat -- " + shlex.quote(self.view.settings().get("ssh_path"))], stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=getStartupInfo())
+
+			p = subprocess.Popen(["ssh", *getSshArgs(), self.view.settings().get("ssh_server"), cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=getStartupInfo())
 			txt, err = p.communicate()
+			code = p.returncode
 
-			if p.returncode != 0 and not (p.returncode == 1 and b"No such file or directory" in err): #ok to open a non existent file
-				path = f"{self.view.settings().get('ssh_server')}:{self.view.settings().get('ssh_path')}"
-				txt = (makeErrorText(err, p.returncode, f"Unable to open this remote file ({path})") + "\n\nDO NOT SAVE THIS FILE because the remote file contents may be destroyed.\nOnce you fix the problem, run the `File:Revert` command from the command pallet to reopen this file.").encode()
-				sublime.error_message(makeErrorText(err, p.returncode, f"Unable to open remote file {path}"))
 
+		#error
+		if code != 0 and not (code == 1 and b"No such file or directory" in err): #ok to open a non existent file
+			path = f"{self.view.settings().get('ssh_server')}:{self.view.settings().get('ssh_path')}"
+			sshErr = code == 255 or code < 0
+			txt = (
+				makeErrorText(f"{'Failed' if sshErr else 'Unable'} to open this remote file ({path})", code, err) +
+				"\n\nYou can try to open this file again with the File > Revert File menu item. (The command pallet `File: Revert` will not work due to a bug in Sublime)"
+			).encode()
+			setRO = True
+			if not sshErr or len(viewToShell) == 0: #i.e. not ssh error or this is the last file being opened at the same time
+				sublime.error_message(makeErrorText(f"Unable to open remote file {path}", code, err))
+
+		#write
+		self.view.set_read_only(False)
 		self.view.set_encoding("UTF-8")
 		self.view.replace(edit, sublime.Region(0, self.view.size()), str(txt, "UTF-8", "ignore"))
+
+		if setRO:
+			self.view.set_read_only(True)
 
 #takes care of writing the file to the remote location and keeping track of modifications
 class openFileOverSshEventListener(sublime_plugin.ViewEventListener):
@@ -1006,19 +1022,21 @@ class openFileOverSshEventListener(sublime_plugin.ViewEventListener):
 
 	@classmethod
 	def applies_to_primary_view_only(cls):
-		return True;
+		return True
 
 
 	def doHacks(self):
 
-		#Sublime Text 4 is smarter than Sublime Text 3
-		#Sublime Text 4 recognizes if its target (set by view.retarget()) does not exist,
-		#   and if it doesn't it will show the choose a save location dialog before on_pre_save is called
-		#So I will not have a chance to make the temp file and retarget to it
-		#However, for some reason, if you do view.set_name before a view.retarget, sublime won't realize the file doesn't exit
-		#So we can get back to Sublime Text 3's behavior
-		#But but, the name has to be different each time set_name() is called
-		#Idk man, its weird
+		"""
+		 * Sublime Text 4 is smarter than Sublime Text 3
+		 * Sublime Text 4 recognizes if its target (set by view.retarget()) does not exist,
+		 *     and if it doesn't it will show the choose a save location dialog before on_pre_save is called
+		 * So I will not have a chance to make the temp file and retarget to it
+		 * However, for some reason, if you do view.set_name before a view.retarget, sublime won't realize the file doesn't exit
+		 * So we can get back to Sublime Text 3's behavior
+		 * But but, the name has to be different each time set_name() is called
+		 * Idk man, its weird
+		"""
 		self.viewName = not self.viewName
 		self.view.set_name(str(self.viewName)) #sets the name so retarget() will behave (see above)
 		self.view.retarget(self.view.settings().get("ssh_fake_path")) #sets the view/buffer path so the file name looks nice
@@ -1030,52 +1048,98 @@ class openFileOverSshEventListener(sublime_plugin.ViewEventListener):
 			self.dirtyWhenDoHacks = False
 
 
-	def on_load(self, setDiffRef=True):
+	def on_load(self):
 
 		self.view.run_command("open_file_over_ssh_text") #open dat remote file
 
 		self.view.sel().clear() #erase selections (the whole view will be selected, idk why)
 		self.view.sel().add(sublime.Region(0, 0)) #put cursor on first line (default sublime behavior when a normal file is opened)
 
-		if setDiffRef:
-			self.diffRef = self.view.substr(sublime.Region(0, self.view.size())) #save the contents of the buffer in order to mimic sublime's incremental diff on a normal file
+		self.diffRef = self.view.substr(sublime.Region(0, self.view.size())) #save the contents of the buffer in order to mimic sublime's incremental diff on a normal file
 
 		self.doHacks()
 
-	def on_revert(self):
+	def on_revert(self, prevSel=None):
 
-		#this handles the revert command run from the command pallet
-		#its not perfect because on_mod is called right after on_revert finishes so the buffer will look dirty
-		#the previous selections are also gone by the time on_revert gets called so I can't save them
+		#this (is supposed to) handle the revert command run from the command pallet (or File menu)
 
-		self.on_load(False)
+		"""
+		 * Reverting is very finicky (and I would argue buggy)
+		 *
+		 * on_revert is called after the view is reverted (as opposed to having a pre_ and post_) so:
+		 *     The previous selections are gone by the time on_revert gets called so they can't be saved
+		 *
+		 * After a revert, on_modified gets called (after on_revert) so the buffer will look dirty for remote files
+		 *
+		 * Reverting does not call on_revert in these conditions:
+		 *     The buffer is empty and the view's target does not exist (i.e. empty remote buffer)
+		 *     The buffer is read_only and the view's target does not exist (i.e. remote file error text)
+		 * These cases can still be caught with on_text_command but:
+		 *     Commands run from the command pallet are not caught by on_text_command (like wtf 🤦‍♂️)
+		 *         See: https://github.com/sublimehq/sublime_text/issues/2234 (was opened in 2018 lol. Its never getting fixed :()
+		 *
+		 *
+		 * So on_text_command will be used to capture the reverts it can (all but command pallet)
+		 * on_revert will get the rest that it can (command pallet accept for the exceptions noted above)
+		 * on_text_command will save the selections so they can be restored (even tho sublime kinda tries to keep them, they get messed up in remote files for some reason)
+		 *
+		 *
+		 * Ideally (i.e. if that github issue ever gets fixed) on_text_command would catch all reverts so that:
+		 *     Sublime never even tries to load a non-existent file
+		 *     All the weird reverting with bad targets doesn't affect remote files
+		 *
+		"""
+
+		self.on_load()
+
+		if prevSel:
+			self.view.sel().clear()
+			self.view.sel().add_all(prevSel)
+
+	def on_text_command(self, command_name, args):
+
+		#used to handle non command pallet reverts (see comment in on_revert)
+
+		if command_name == "revert":
+
+			self.on_revert(list(self.view.sel()) if not self.view.is_read_only() else None) #don't save error text selection
+			return ("SOFOS_NOOP", {}) #sublime ignores non-existent commands
 
 	def on_pre_save(self):
 
 		#this gets called after the save dialog has exited when this file is not view.retarget()'ed (see openFileOverSshCommand.run() and doHacks())
 
-		#two ways I could write changes to the remote file
-		#
-		#1. (what I am currently doing), uses pre_save
-		#   use ssh and copy stdin to the remote file i.e. erase remote file with stdin
-		#   stdin is set to the buffer contents using the argument to popen.communicate()
-		#
-		#2. (not sure which is better), would use post_save
-		#   after the file is saved to the temp file, scp to the temp file to the remote location
-		#   just like anyone would do normally when they wanted to copy a local file to a remote location
+		"""
+		 * two ways I could write changes to the remote file
+		 *
+		 * 1. (what I am currently doing), uses pre_save
+		 *     use ssh and copy stdin to the remote file i.e. erase remote file with stdin
+		 *     stdin is set to the buffer contents using the argument to popen.communicate()
+		 *
+		 * 2. (not sure which is better), would use post_save
+		 *     after the file is saved to the temp file, scp to the temp file to the remote location
+		 *     just like anyone would do normally when they wanted to copy a local file to a remote location
+		"""
 
-		p = subprocess.Popen(["ssh", *getSshArgs(), self.view.settings().get("ssh_server"), "cat > " + shlex.quote(self.view.settings().get('ssh_path'))], stdin=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=getStartupInfo()) #ssh cp stdin to remote file
-		_, err = p.communicate(self.view.substr(sublime.Region(0, self.view.size())).encode("UTF-8")) #set stdin to the buffer contents
+		if not self.view.is_read_only(): #don't save the error message lol
 
-		if p.returncode != 0:
-			sublime.error_message(makeErrorText(err, p.returncode, f"Unable to save remote file {self.view.settings().get('ssh_server')}:{self.view.settings().get('ssh_path')}"))
-			self.dirtyWhenDoHacks = True
+			p = subprocess.Popen(["ssh", *getSshArgs(), self.view.settings().get("ssh_server"), "cat > " + shlex.quote(self.view.settings().get("ssh_path"))], stdin=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=getStartupInfo()) #ssh cp stdin to remote file
+			_, err = p.communicate(self.view.substr(sublime.Region(0, self.view.size())).encode("UTF-8")) #set stdin to the buffer contents
 
-		#The Windows Python temporary files cannot be opened by another process before close() (see tempfile.NamedTemporaryFile docs)
-		#So on a Mac/Linux:
-		#   Make the file (delete=True), retarget sublime, then close() the file which deletes it
-		#On Windows:
-		#   Make the file with delete=False, close() the file (does not delete it), retarget sublime, delete file with os.remove()
+			if p.returncode != 0:
+				sublime.error_message(makeErrorText(f"Unable to save remote file {self.view.settings().get('ssh_server')}:{self.view.settings().get('ssh_path')}", p.returncode, err))
+				self.dirtyWhenDoHacks = True
+
+		else:
+			print("OpenFileOverSSH: not saving read only buffer (error message)")
+
+		"""
+		 * The Windows Python temporary files cannot be opened by another process before close() (see tempfile.NamedTemporaryFile docs)
+		 * So on a Mac/Linux:
+		 *     Make the file (delete=True), retarget sublime, then close() the file which deletes it
+		 * On Windows:
+		 *     Make the file with delete=False, close() the file (does not delete it), retarget sublime, delete file with os.remove()
+		"""
 		self.file = tempfile.NamedTemporaryFile(delete=(not isWindows)) #make a temp file to save to because you cannot stop sublime saving to a file
 		if isWindows:
 			self.file.close()
