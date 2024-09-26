@@ -1,0 +1,20 @@
+OpenFileOverSSH v1.5
+
+Highlights:
+ * Browse anywhere in the filesystem
+ * See file size and sub folder count
+
+Changes:
+ * File Browser:
+   # Added file size and sub directory count
+   # Added a hidden files settings
+   # Added an Options action to edit session settings
+   # Added a go to root (/) action
+ * Added path (file/folder) abilities to the server input
+ * Added remote error checking (file permissions, deleted symlinks, etc)
+ * Fixed not being able to open files starting with a -
+
+See:
+ * https://github.com/AncientRoman/SublimeOpenFileOverSSH/releases/tag/1.5.0
+ * https://github.com/AncientRoman/SublimeOpenFileOverSSH
+for more info

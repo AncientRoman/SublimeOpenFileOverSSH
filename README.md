@@ -1,4 +1,4 @@
-# SublimeOpenFileOverSSH v1.4.1
+# SublimeOpenFileOverSSH v1.5.0
 A lightweight Sublime Text 4 plugin that allows a file to be opened on a remote machine over ssh and seamlessly edited and saved back to the remote machine
 
 ## Installation
@@ -102,8 +102,9 @@ Key Bindings are disabled by default per Package Control requirements.<br>
 Enable the Open via SSH key binding by opening the key binding file in a similar manner as the settings file and copying over the disabled binding.
 
 ## What's New?
+v1.5: Added file size, hidden files, root dir (/), and remote error checking<br>
 v1.4.1: Fixed silently failing to connect on Windows and added additional error handling<br>
-v1.4: Added multiplexing, menu items, error checking, new file/folder creation, ui updates, settings, and Package Control installation<br>
+v1.4: Added multiplexing, menu items, ssh error checking, new file/folder creation, ui updates, settings, and Package Control installation<br>
 v1.3: Support for Sublime Text 4<br>
 v1.2.2: Fixed files in subfolders being opened when a glob was used<br>
 v1.2.1: Fixed crashing sublime when a remote file was opened that did not have a new line at the end<br>
