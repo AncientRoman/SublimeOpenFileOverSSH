@@ -23,7 +23,7 @@ Trigger the remote file selection using one of these options.
 
 * Use the _File > Open via SSH_ menu item
 * Run the _Open File Over SSH_ command from the command palette
-* Press _cmd-shift-o_ or _wndws-shift-o_ (you must set this up, see [Key Bindings](#key-bindings))
+* Press _cmd-shift-o_ or _ctrl-shift-o_ (you must set this up, see [Key Bindings](#key-bindings))
 
 Once triggered, input the server details and browse/open remote files as follows.
 

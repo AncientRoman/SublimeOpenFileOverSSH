@@ -3,7 +3,7 @@
 	//This is the recommended keybinding for the Open File Over SSH command
 	//Activate it by placing it in your Default.sublime-keymap file
 	{
-		"keys": ["super+shift+o"],
+		"keys": ["primary+shift+o"],
 		"command": "show_overlay",
 		"args":
 		{
