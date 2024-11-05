@@ -23,7 +23,7 @@ from enum import Enum
  * The middle of this file has the Input Pallet stuff which is best read starting with the serverInputHandler and then the pathInputHandler.
  * The other InputHandlers are for the extra actions (glob, new, and options).
  *
- * The top of this file includes ssh and popen args which include the multiplexing information.
+ * The top of this file includes ssh and popen args which contain the multiplexing information.
  * The custom SshShell class below those functions handles the Input Pallet's persistent ssh connection.
 """
 
@@ -278,6 +278,90 @@ class SshShell():
 		self.close()
 
 
+#shared arguments for command pallet handlers. Acts as a dictionary with special path and session settings features
+class Argz(dict):
+
+	settings = sublime.load_settings(SETTINGS_FILE)
+	SESS_SETTINGS_DATA = [("pathChecking", True), ("hiddenFiles", "showHiddenFiles", False)]
+
+	def __init__(self):
+
+		super().__init__() #extend dict
+
+		#session settings
+		self.settings = {}
+		for item in self.SESS_SETTINGS_DATA:
+			pref = self.__class__.settings.get(item[0 if len(item) == 2 else 1])
+			self.settings[item[0]] = pref if pref != None else item[-1]
+
+		self._path = [] #array of tuples or strings containing path components (folders or files); each item is one InputHandler
+		self._strPath = "" #string representation of path
+		self._flatLen = 0 #length of flattened _path
+		self._oldPath = self.__class__.settings.setdefault("path", [])[:] #default selection flat path
+
+
+	"""
+	 * This class is all about path and strPath
+	 * strPath could just be created from path every time using a flatten method,
+	 *     but instead this uses caching and does not allow direct editing of path
+	 * Use path: append, pop, and len to interact with path
+	 * Use nextPath for path auto completion
+	 * Use savePath to write the flattened path to SETTINGS_FILE for use in next session's auto completion
+	"""
+
+	@property
+	def strPath(self):
+		return self._strPath
+
+	@property
+	def nextPath(self): #returns the default next path component, which is the previously selected path (either from a past session or a pathPop())
+
+		try:
+			return self._oldPath[self._flatLen]
+		except IndexError:
+			return None
+
+	def pathAppend(self, val):
+
+		self._path.append(val)
+
+		try:
+			self._strPath += "".join(val)
+		except TypeError: #val is not a string
+			pass
+
+		val = list(val) if isinstance(val, tuple) else [val,]
+		if self._oldPath[self._flatLen:self._flatLen+len(val)] != val: #keep _oldPath up to date with current selections if they differ from previous ones
+			self._oldPath[self._flatLen:] = val
+			if self._oldPath == self.__class__.settings["path"][:len(self._oldPath)]: #if _oldPath starts to match settings[path] again, go back to using settings[path]
+				self._oldPath = self.__class__.settings["path"][:]
+		self._flatLen += len(val)
+
+	def pathPop(self):
+
+		popped = self._path.pop()
+
+		try:
+			self._strPath = self._strPath[:-len("".join(popped))]
+		except TypeError:
+			pass
+
+		self._flatLen -= len(popped) if isinstance(popped, tuple) else 1
+
+		return popped
+
+	def pathLen(self):
+
+		return len(self._path)
+
+	def savePath(self):
+
+		self.__class__.settings["path"] = self._oldPath #oldPath happens to be the current flattened path when a file (or action) is selected
+		sublime.save_settings(SETTINGS_FILE)
+
+
+
+
 #input pallet server input
 class serverInputHandler(sublime_plugin.TextInputHandler):
 
@@ -288,10 +372,6 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 		self.argz = argz
 		self.ssh = None
 		self.settings = sublime.load_settings(SETTINGS_FILE)
-
-		if not "pathChecking" in argz:
-			pref = self.settings.get("pathChecking")
-			argz["pathChecking"] = pref if pref != None else True
 
 	@staticmethod
 	def checkSyntax(text): #false (0): invalid, 1: user/server, 2: server, 3: folder path, 4: file path
@@ -354,7 +434,7 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 			sublime.error_message(makeErrorText(f"Could not connect to {server}", ssh.retCode, ssh.error))
 			return False
 
-		if type == 3 and self.argz["pathChecking"]:
+		if type == 3 and self.argz.settings["pathChecking"]:
 
 			path = text[text.index(":") + 1:]
 			echoCode = "printf \"$?\\n\""
@@ -382,10 +462,14 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 		self.settings.set("server", text)
 		sublime.save_settings(SETTINGS_FILE)
 
-		self.argz["server"] = text[:text.index(":")]
+		sep = text.index(":")
+		self.argz["server"] = text[:sep]
 		self.argz["sshShell"] = self.ssh
-		if text[-1] != ":": #i.e. type 3 or 4
-			self.argz["path" if text[-1] == "/" else "paths"] = [text[text.index(":") + 1:]]
+
+		if text[-1] == "/": #type 3
+			self.argz.pathAppend(tuple(comp + "/" for comp in text[sep + 1:].split("/")[:-1]))
+		elif text[-1] != ":": #type 4
+			self.argz["paths"] = [text[sep + 1:]]
 		self.argz["hasStartDir"] = text[-1] == "/" #need to know if type 3 for ../ handling
 
 	#close ssh
@@ -423,7 +507,7 @@ class globInputHandler(sublime_plugin.TextInputHandler):
 
 	def getMatchingPaths(self, text):
 
-		path = self.ssh.quote("".join(self.argz["path"][:-1]))
+		path = self.ssh.quote(self.argz.strPath)
 		globs = [path + glob for glob in text.split()]
 
 		return [path for path in self.ssh.runCmd(f"/bin/ls -1Lpd -- {' '.join(globs)}", throwOnSshErr=True)[0] if not path.endswith("/")] #will return full paths
@@ -461,7 +545,7 @@ class globInputHandler(sublime_plugin.TextInputHandler):
 	#update values
 	def confirm(self, text):
 
-		self.settings.set("path", self.argz["path"])
+		self.argz.savePath()
 		self.settings.set("glob", text)
 		sublime.save_settings(SETTINGS_FILE)
 
@@ -470,7 +554,7 @@ class globInputHandler(sublime_plugin.TextInputHandler):
 	#pop()
 	def cancel(self):
 
-		self.argz["path"].pop() #pop off the * that got us here
+		self.argz.pathPop() #pop off the * that got us here
 
 	#all done
 	def next_input(self, args):
@@ -486,7 +570,6 @@ class newInputHandler(sublime_plugin.TextInputHandler):
 
 		self.argz = argz
 		self.ssh = argz["sshShell"]
-		self.settings = sublime.load_settings(SETTINGS_FILE)
 
 	@staticmethod
 	def splitPath(text): #returns (path, file, folders)
@@ -508,7 +591,7 @@ class newInputHandler(sublime_plugin.TextInputHandler):
 
 	def fileExists(self, file):
 
-		path = self.ssh.quote("".join(self.argz["path"][:-1]) + file)
+		path = self.ssh.quote(self.argz.strPath + file)
 		return len(self.ssh.runCmd("/bin/ls -d -- " + path, throwOnSshErr=True)[0]) > 0
 
 	#gray placeholder text
@@ -557,30 +640,26 @@ class newInputHandler(sublime_plugin.TextInputHandler):
 
 		path, file, folders = self.splitPath(text)
 
-		self.argz["path"].pop() #remove the new file that got us here
-		curPath = "".join(self.argz["path"])
+		self.argz.pathPop() #remove the new file that got us here
 
 		#make the folders
 		if len(folders) > 0:
-			self.ssh.runCmd("mkdir -p -- " + self.ssh.quote(curPath + folders), throwOnSshErr=True)
-			self.argz["path"].extend(path[:-1]) #add the new folders to the path
+			self.ssh.runCmd("mkdir -p -- " + self.ssh.quote(self.argz.strPath + folders), throwOnSshErr=True)
+			self.argz.pathAppend(path[:-1]) #add the new folders to the path
 
 		#open the file
 		if len(file) > 0:
-			self.argz["path"].append(pathInputHandler.Action.NEW) #make it look like the user selected new in the new (or old) folder(s)
-			self.settings.set("path", self.argz["path"])
-			self.argz["paths"] = [curPath + folders + file]
+			self.argz.pathAppend(pathInputHandler.Action.NEW) #make it look like the user selected new in the new (or old) folder(s)
+			self.argz.savePath()
+			self.argz["paths"] = [self.argz.strPath + file]
 		else:
-			self.settings.set("path", self.argz["path"]) #set the previous selection(s) to the new folders
-			for i in range(len(path[:-1])): #remove the new folders in the current path
-				self.argz["path"].pop()
-
-		sublime.save_settings(SETTINGS_FILE)
+			self.argz.savePath() #set the previous selection(s) to the new folders
+			self.argz.pathPop() #remove the new folders in the current path
 
 	#pop()
 	def cancel(self):
 
-		self.argz["path"].pop() #pop off the New File that got us here
+		self.argz.pathPop() #pop off the New File that got us here
 
 	#all done
 	def next_input(self, args):
@@ -611,14 +690,14 @@ class optionsInputHandler(sublime_plugin.ListInputHandler):
 			"Toggle Hidden Files",
 			"dot files",
 			".",
-			lambda argz: f"{'Hide' if argz['hiddenFiles'] else 'Show'} Hidden Files (dot files)",
+			lambda settings: f"{'Hide' if settings['hiddenFiles'] else 'Show'} Hidden Files (dot files)",
 			"toggleHiddenFiles"
 		)
 		PCHECKING = (
 			"Toggle Path Checking",
 			"error time",
 			"✓",
-			lambda argz: f"Show Errors {'After' if argz['pathChecking'] else 'Before'} Selection",
+			lambda settings: f"Show Errors {'After' if settings['pathChecking'] else 'Before'} Selection",
 			"togglePathChecking"
 		)
 
@@ -634,20 +713,19 @@ class optionsInputHandler(sublime_plugin.ListInputHandler):
 
 
 	@staticmethod
-	def toggleHiddenFiles(argz):
-		argz["hiddenFiles"] = not argz["hiddenFiles"]
+	def toggleHiddenFiles(settings):
+		settings["hiddenFiles"] = not settings["hiddenFiles"]
 
 	@staticmethod
-	def togglePathChecking(argz):
-		argz["pathChecking"] = not argz["pathChecking"]
+	def togglePathChecking(settings):
+		settings["pathChecking"] = not settings["pathChecking"]
 
 
 	def __init__(self, argz):
 
 		super().__init__()
 
-		self.argz = argz
-		argz["path"].pop() #remove the edit options that got us here
+		self.settings = argz.settings
 
 	#show all Options
 	def list_items(self):
@@ -661,13 +739,13 @@ class optionsInputHandler(sublime_plugin.ListInputHandler):
 	def preview(self, value):
 
 		preview = self.Option(value).preview
-		return preview(self.argz) if callable(preview) else preview
+		return preview(self.settings) if callable(preview) else preview
 
 	#run action
 	def confirm(self, value):
 
 		try:
-			getattr(self, self.Option(value).action)(self.argz)
+			getattr(self, self.Option(value).action)(self.settings)
 		except AttributeError:
 			print(f"OpenFileOverSSH: Bad Option function name: {self.Option(value).action}")
 
@@ -694,7 +772,7 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 
 		GLOB = 1, "Open Multiple Files with a Glob", globInputHandler
 		NEW = 2, "Make a New File or Folder Here", newInputHandler
-		OPTIONS = 3, lambda self: f"Edit Session Options such as {'hiding' if self.argz['hiddenFiles'] else 'showing'} hidden files", optionsInputHandler
+		OPTIONS = 3, lambda self: f"Edit Session Options such as {'hiding' if self.argz.settings['hiddenFiles'] else 'showing'} hidden files", optionsInputHandler
 
 		def __new__(cls, val, preview, handler):
 
@@ -711,13 +789,6 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 
 		self.argz = argz
 		self.ssh = argz["sshShell"]
-		self.settings = sublime.load_settings(SETTINGS_FILE)
-
-		if not "path" in argz:
-			argz["path"] = []
-
-		if not "hiddenFiles" in argz:
-			argz["hiddenFiles"] = not not self.settings.get("showHiddenFiles") #convert None to False
 
 	@staticmethod
 	def isPath(value):
@@ -742,8 +813,8 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 	def list_items(self):
 
 		#setup
-		path = self.ssh.quote("".join(self.argz["path"]))
-		cmd = f"/bin/ls -1Lp -lgo {'-a' if self.argz['hiddenFiles'] else ''} -- {path}"
+		path = self.ssh.quote(self.argz.strPath)
+		cmd = f"/bin/ls -1Lp -lgo {'-a' if self.argz.settings['hiddenFiles'] else ''} -- {path}"
 		files, retCode, err = self.ssh.runCmd(cmd)
 		files = files[1:] #skip the total line
 		items = []
@@ -820,7 +891,7 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 
 
 		#actions and warnings
-		if not self.argz["path"]:
+		if not self.argz.pathLen():
 			items.append(sublime.ListInputItem("/", "/", annotation="Root Dir", kind=self.Kind.ACTION))
 		if hasFile:
 			items.append(sublime.ListInputItem("*", self.Action.GLOB, annotation="Pattern", kind=self.Kind.ACTION))
@@ -833,10 +904,10 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 
 		#default selection
 		try:
-			items = (items, next(j for j,i in enumerate(items) if i.value == self.settings["path"][len(self.argz["path"])]))
-		except (KeyError, IndexError, StopIteration): #KeyError for "path", IndexError for [len()], StopIteration for no matching value
+			if self.argz.nextPath != None:
+				items = (items, next(i for i,item in enumerate(items) if item.value == self.argz.nextPath))
+		except StopIteration: #no matching value
 			pass
-
 
 		return items
 
@@ -864,9 +935,9 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 		if value == None:
 			return False
 
-		if self.isPath(value) and self.argz["pathChecking"]:
+		if self.isPath(value) and self.argz.settings["pathChecking"]:
 
-			path = self.ssh.quote("".join(self.argz["path"]) + value)
+			path = self.ssh.quote(self.argz.strPath + value)
 			_, code, _ = self.ssh.runCmd(f"test -{'x' if self.isFolder(value) else 'r'} {path}")
 
 			if code == 1: #greater than 1 means test errored
@@ -879,23 +950,25 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 	def confirm(self, value):
 
 		#next_input cannot determine if ../ should BackInputHandler because the path will already be updated, so it'll use self.popped
-		self.popped = value == self.parentDir and len(self.argz["path"]) > self.argz["hasStartDir"] and self.argz["path"][-1] != self.parentDir #if ../ should pop
+		self.popped = value == self.parentDir and self.argz.pathLen() > self.argz["hasStartDir"] and not self.argz.strPath.endswith(self.parentDir) #if ../ should pop
 		if not self.popped:
-			self.argz["path"].append(value)
+			if value != self.Action.OPTIONS: #options is a one-off that shouldn't be used as an autocompleted path (and doesn't need to be append-ed)
+				self.argz.pathAppend(value)
 		else:
-			self.argz["path"].pop()
+			self.argz.pathPop()
 
 		if self.isPath(value) and not self.isFolder(value):
+
 			#save path when done as opposed to as we go because this how sublime does it with internal commands
-			self.settings.set("path", self.argz["path"])
-			sublime.save_settings(SETTINGS_FILE)
-			self.argz["paths"] = ["".join(self.argz["path"])]
+			self.argz.savePath()
+
+			self.argz["paths"] = [self.argz.strPath]
 
 	#pop
 	def cancel(self):
 
 		try:
-			path = self.argz["path"].pop()
+			path = self.argz.pathPop()
 		except IndexError: #Nothing to pop
 			pass
 
@@ -950,7 +1023,7 @@ class openFileOverSshCommand(sublime_plugin.WindowCommand):
 
 	def input(self, args):
 
-		self.argz = {}
+		self.argz = Argz()
 		return serverInputHandler(self.argz)
 
 
