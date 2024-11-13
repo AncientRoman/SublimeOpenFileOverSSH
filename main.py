@@ -1,5 +1,5 @@
 import os #temp file removal and path splitting
-import math #pretty size calcs
+import math #pretty size calcs and string collapsing
 import shlex #shell arg escaping
 import string #random string creation
 import random #random string creation
@@ -282,7 +282,11 @@ class SshShell():
 class Argz(dict):
 
 	settings = sublime.load_settings(SETTINGS_FILE)
-	SESS_SETTINGS_DATA = [("pathChecking", True), ("hiddenFiles", "showHiddenFiles", False)]
+	SESS_SETTINGS_DATA = [
+		("pathChecking", True),
+		("hiddenFiles", "showHiddenFiles", False),
+		("lastDirAct", "lastDirAction", False)
+	]
 
 	def __init__(self):
 
@@ -297,29 +301,25 @@ class Argz(dict):
 		self._path = [] #array of tuples or strings containing path components (folders or files); each item is one InputHandler
 		self._strPath = "" #string representation of path
 		self._flatLen = 0 #length of flattened _path
-		self._oldPath = self.__class__.settings.setdefault("path", [])[:] #default selection flat path
+		self._oldPath = self.__class__.settings.setdefault("path", [])[:] #auto completion flat path
+
+	@property
+	def _flatPath(self): #flattened self._path
+		return self._oldPath[:self._flatLen]
 
 
 	"""
 	 * This class is all about path and strPath
 	 * strPath could just be created from path every time using a flatten method,
 	 *     but instead this uses caching and does not allow direct editing of path
-	 * Use path: append, pop, and len to interact with path
-	 * Use nextPath for path auto completion
+	 * Use path: append, pop, and peek to interact with path
+	 * Use completion and completionsToPastPath for path auto completion
 	 * Use savePath to write the flattened path to SETTINGS_FILE for use in next session's auto completion
 	"""
 
 	@property
 	def strPath(self):
 		return self._strPath
-
-	@property
-	def nextPath(self): #returns the default next path component, which is the previously selected path (either from a past session or a pathPop())
-
-		try:
-			return self._oldPath[self._flatLen]
-		except IndexError:
-			return None
 
 	def pathAppend(self, val):
 
@@ -350,13 +350,31 @@ class Argz(dict):
 
 		return popped
 
-	def pathLen(self):
+	def pathPeek(self):
 
-		return len(self._path)
+		return self._path[-1] if self._path else None
+
+	@property
+	def completion(self): #returns the default next path component, which is the previously selected path (either from a past session or a pathPop())
+
+		try:
+			return self._oldPath[self._flatLen]
+		except IndexError:
+			return None
+
+	def completionsToPastPath(self): #returns the tuple needed for the current path to equal the previous session's path, or None if no such append()-able tuple exists
+
+		new = self._flatPath
+		old = self.__class__.settings["path"]
+
+		if new == old[:len(new)]:
+			return tuple(old[len(new):])
+
+		return None
 
 	def savePath(self):
 
-		self.__class__.settings["path"] = self._oldPath #oldPath happens to be the current flattened path when a file (or action) is selected
+		self.__class__.settings["path"] = self._flatPath
 		sublime.save_settings(SETTINGS_FILE)
 
 
@@ -470,7 +488,6 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 			self.argz.pathAppend(tuple(comp + "/" for comp in text[sep + 1:].split("/")[:-1]))
 		elif text[-1] != ":": #type 4
 			self.argz["paths"] = [text[sep + 1:]]
-		self.argz["hasStartDir"] = text[-1] == "/" #need to know if type 3 for ../ handling
 
 	#close ssh
 	def cancel(self):
@@ -584,7 +601,7 @@ class newInputHandler(sublime_plugin.TextInputHandler):
 		if "" in folders: #disallow multiple or initial slashes
 			return (None, file, None)
 
-		path = [folder + "/" for folder in folders] + [file]
+		path = tuple(folder + "/" for folder in folders) + (file,)
 		folders = "".join(path[:-1])
 
 		return (path, file, folders)
@@ -700,6 +717,13 @@ class optionsInputHandler(sublime_plugin.ListInputHandler):
 			lambda settings: f"Show Errors {'After' if settings['pathChecking'] else 'Before'} Selection",
 			"togglePathChecking"
 		)
+		LASTDIR = (
+			"Toggle Last Dir Action",
+			"last dir",
+			"/",
+			lambda settings: f"{'Hide' if settings['lastDirAct'] else 'Show'} Last Directory",
+			"toggleLastDir"
+		)
 
 		def __new__(cls, text, annotation, kLetter, preview, action):
 
@@ -719,6 +743,10 @@ class optionsInputHandler(sublime_plugin.ListInputHandler):
 	@staticmethod
 	def togglePathChecking(settings):
 		settings["pathChecking"] = not settings["pathChecking"]
+
+	@staticmethod
+	def toggleLastDir(settings):
+		settings["lastDirAct"] = not settings["lastDirAct"]
 
 
 	def __init__(self, argz):
@@ -792,11 +820,13 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 
 	@staticmethod
 	def isPath(value):
-		return isinstance(value, str)
+		#its assumed tuples only contains strings (i.e. no actions in tuples)
+		return isinstance(value, (str, tuple, list)) #a tuple is not a sublime.Value (JSON) so tuples get converted to lists
 
 	@staticmethod
-	def isFolder(strValue):
-		return strValue.endswith("/")
+	def isFolder(pathVal):
+		strPath = pathVal[-1] if isinstance(pathVal, (tuple, list)) else pathVal
+		return strPath.endswith("/")
 
 	@staticmethod
 	def prettySize(bytes):
@@ -808,6 +838,28 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 		p = math.pow(1024, i)
 		s = bytes / p
 		return f"{int(round(s)) if s.is_integer() else round(s, 1)}{sizes[i]}"
+
+	@staticmethod
+	def collapse(str, maxLen, splitChar=None): #turns "text,text,text" into "text,...,text"
+
+		if len(str) <= maxLen:
+			return str #only str
+		if maxLen <= 3:
+			return "." * maxLen #only dots
+
+		maxLen -= 3
+		if not splitChar or str.find(splitChar) == -1:
+			return str[:math.ceil(maxLen/2)] + "..." + str[len(str) - (maxLen//2):] #even split favoring start
+
+		start = str[:str.find(splitChar) + 1]
+		if len(start) >= maxLen:
+			return str[:maxLen] + "..." #only start
+
+		end = str[str.rfind(splitChar):]
+		if len(start) + len(end) >= maxLen:
+			return start + "..." + end[-(maxLen - len(start)):] #include end but favor start
+
+		return str[:maxLen - len(end) + 1] + "..." + end #start and onward but including end (maybe should be even split?)
 
 	#ls, actions, and initial selection
 	def list_items(self):
@@ -891,11 +943,19 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 
 
 		#actions and warnings
-		if not self.argz.pathLen():
-			items.append(sublime.ListInputItem("/", "/", annotation="Root Dir", kind=self.Kind.ACTION))
+		if self.argz.pathPeek() == None:
+			items.append(sublime.ListInputItem("/", ("/",), annotation="Root Dir", kind=self.Kind.ACTION)) #tuple to disable ../ popping
 		if hasFile:
 			items.append(sublime.ListInputItem("*", self.Action.GLOB, annotation="Pattern", kind=self.Kind.ACTION))
 		items.append(sublime.ListInputItem("New", self.Action.NEW, annotation="Create", kind=self.Kind.ACTION))
+
+		if self.argz.settings["lastDirAct"]:
+			path = self.argz.completionsToPastPath()
+			path = path[:-1] if path and not (self.isPath(path[-1]) and self.isFolder(path[-1])) else path #remove file/action if needed
+			if path:
+				path = path if len(path) > 1 else path[0] #de-tuple if needed for ../ handling
+				items.append(sublime.ListInputItem("Last Dir", path, annotation=self.collapse("".join(path)[:-1], 49, "/")+"/", kind=self.Kind.ACTION))
+
 		items.append(sublime.ListInputItem("Options", self.Action.OPTIONS, annotation="Session Prefs", kind=self.Kind.ACTION))
 
 		if self.error:
@@ -904,10 +964,12 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 
 		#default selection
 		try:
-			if self.argz.nextPath != None:
-				items = (items, next(i for i,item in enumerate(items) if item.value == self.argz.nextPath))
+			if self.argz.completion != None:
+				nextPath = self.argz.completion if self.argz.completion != "/" else ("/",)
+				items = (items, next(i for i,item in enumerate(items) if item.value == nextPath))
 		except StopIteration: #no matching value
 			pass
+
 
 		return items
 
@@ -937,7 +999,7 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 
 		if self.isPath(value) and self.argz.settings["pathChecking"]:
 
-			path = self.ssh.quote(self.argz.strPath + value)
+			path = self.ssh.quote(self.argz.strPath + "".join(value))
 			_, code, _ = self.ssh.runCmd(f"test -{'x' if self.isFolder(value) else 'r'} {path}")
 
 			if code == 1: #greater than 1 means test errored
@@ -950,18 +1012,16 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 	def confirm(self, value):
 
 		#next_input cannot determine if ../ should BackInputHandler because the path will already be updated, so it'll use self.popped
-		self.popped = value == self.parentDir and self.argz.pathLen() > self.argz["hasStartDir"] and not self.argz.strPath.endswith(self.parentDir) #if ../ should pop
+		self.popped = value == self.parentDir and not isinstance(self.argz.pathPeek(), (type(None), tuple)) and not self.argz.strPath.endswith(self.parentDir) #if ../ should pop
 		if not self.popped:
-			if value != self.Action.OPTIONS: #options is a one-off that shouldn't be used as an autocompleted path (and doesn't need to be append-ed)
-				self.argz.pathAppend(value)
+			if value != self.Action.OPTIONS: #options is a one-off that shouldn't be used as an autocompleted path (and thus doesn't need to be append-ed)
+				self.argz.pathAppend(value if not isinstance(value, list) else tuple(value)) #a tuple is not a sublime.Value (JSON) so tuples get converted to lists
 		else:
 			self.argz.pathPop()
 
 		if self.isPath(value) and not self.isFolder(value):
 
-			#save path when done as opposed to as we go because this how sublime does it with internal commands
-			self.argz.savePath()
-
+			self.argz.savePath() #save path when done as opposed to as we go because this how sublime does it with internal commands
 			self.argz["paths"] = [self.argz.strPath]
 
 	#pop
@@ -985,6 +1045,10 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 			return pathInputHandler(self.argz)
 
 		return None
+
+	#fix Last Dir action
+	def description(self, value, text):
+		return "".join(value) if self.isPath(value) else text
 
 
 #the command that is run from the command pallet

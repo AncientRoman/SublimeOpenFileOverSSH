@@ -51,6 +51,13 @@
 
 
 	/*
+	 * Show Last Directory Action
+	 * Whether or not to show the Last Dir action which jumps into the previous session's directory.
+	*/
+	//"lastDirAction": false,
+
+
+	/*
 	 * OpenSSH-Type Configuration
 	 * For advanced users only.
 	 * This plugin assumes the `ssh` command is OpenSSH.
