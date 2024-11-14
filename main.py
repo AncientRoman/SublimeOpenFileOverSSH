@@ -46,12 +46,15 @@ def getStartupInfo():
 
 	return startupinfo
 
-#gets the appropriate ssh args using the settings file
-def getSshArgs():
+#makes the appropriate ssh args using the settings file and arguments
+def getSshArgs(*, port=None):
 
 	settings = sublime.load_settings(SETTINGS_FILE)
 
 	args = ["-T"] #Non-interactive mode. While non-interactive will be the default, we'll get an unable to allocate tty error message without this
+
+	if port not in (None, 0, ""):
+		args.extend(["-p", str(port)])
 
 	if not settings.get("useOpenSshConfigArgs", True):
 		return args
@@ -93,7 +96,7 @@ def getSshArgs():
 
 	return args
 
-#makes an error string for an ssh error. Uses the new single-dispatch (overload) functions to accept string or bytes
+#makes an error string for an ssh error. sshStderr can be string or bytes
 def makeErrorText(title, sshRetCode, sshStderr):
 
 	if isinstance(sshStderr, bytes) or isinstance(sshStderr, bytearray):
@@ -132,9 +135,9 @@ class SshShell():
 		"export LC_TIME=POSIX" #set ls -l to output a standardized time format
 	]
 
-	def __init__(self, userAndServer):
+	def __init__(self, userAndServer, port=None):
 
-		self.shell = subprocess.Popen(["ssh", *getSshArgs(), userAndServer], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=getStartupInfo())
+		self.shell = subprocess.Popen(["ssh", *getSshArgs(port=port), userAndServer], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=getStartupInfo())
 		_, code, _ = self.runCmd("; ".join(self.setupCmds)) #read past all login information and run the setupCmds; will block until completed or error
 
 		"""
@@ -392,19 +395,19 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 		self.settings = sublime.load_settings(SETTINGS_FILE)
 
 	@staticmethod
-	def checkSyntax(text): #false (0): invalid, 1: user/server, 2: server, 3: folder path, 4: file path
+	def checkSyntax(text): #false (0): invalid, 1: user/server, 2: server, 3: port, 4: folder path, 5: file path
 
 		if not (
 			len(text) >= 2 and
-			":" in text and
+			text.count(":") == 1 or text.count(":") == 2 and text[text.index(":")+1:text.rindex(":")].isdecimal() and
 			("@" not in text or text.count("@") == 1 and text[0] != "@" and text.index("@") < text.index(":") - 1)
 		):
 			return False
 
 		if text[-1] == ":":
-			return 1 if "@" in text else 2
+			return 3 if text.count(":") > 1 else 1 if "@" in text else 2
 		else:
-			return 3 if text[-1] == "/" else 4
+			return 4 if text[-1] == "/" else 5
 
 	#gray placeholder text
 	def placeholder(self):
@@ -426,10 +429,12 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 
 		ret = "Server Input Valid"
 		if type == 2:
-			ret += "for Default Username"
+			ret += " for Default Username"
 		elif type == 3:
-			ret += "; Open File Browser at Folder"
+			ret += " with Specific Port"
 		elif type == 4:
+			ret += "; Open File Browser at Folder"
+		elif type == 5:
 			ret += "; Open/Create File"
 
 		return ret
@@ -441,22 +446,23 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 
 		if not type:
 			return False
-		if type == 4:
+		if type == 5:
 			return True
 
 		server = text[:text.index(":")]
-		ssh = SshShell(server)
+		port = text[text.index(":")+1:text.rindex(":")] #empty string if no port
+		ssh = SshShell(server, port)
 
 		if not ssh.isAlive(): #check if not dead
 			#the dialog looks kinda ugly, but I can't think of a better way
 			sublime.error_message(makeErrorText(f"Could not connect to {server}", ssh.retCode, ssh.error))
 			return False
 
-		if type == 3 and self.argz.settings["pathChecking"]:
+		if type == 4 and self.argz.settings["pathChecking"]:
 
-			path = text[text.index(":") + 1:]
+			path = text[text.rindex(":") + 1:]
 			echoCode = "printf \"$?\\n\""
-			[e, d], x, _ = ssh.runCmd(f"test -e {path.rstrip('/')}; {echoCode}; test -d {path}; {echoCode}; test -x {path}")
+			[e, d], x, _ = ssh.runCmd(f"test -e {ssh.quote(path.rstrip('/'))}; {echoCode}; test -d {ssh.quote(path)}; {echoCode}; test -x {ssh.quote(path)}")
 
 			if e == "1": #greater than 1 means test errored
 				msg = "No such file or directory"
@@ -481,13 +487,15 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 		sublime.save_settings(SETTINGS_FILE)
 
 		sep = text.index(":")
+		sep2 = text.rindex(":")
 		self.argz["server"] = text[:sep]
+		self.argz["port"] = text[sep+1:sep2]
 		self.argz["sshShell"] = self.ssh
 
 		if text[-1] == "/": #type 3
-			self.argz.pathAppend(tuple(comp + "/" for comp in text[sep + 1:].split("/")[:-1]))
+			self.argz.pathAppend(tuple(comp + "/" for comp in text[sep2 + 1:].split("/")[:-1]))
 		elif text[-1] != ":": #type 4
-			self.argz["paths"] = [text[sep + 1:]]
+			self.argz["paths"] = [text[sep2 + 1:]]
 
 	#close ssh
 	def cancel(self):
@@ -1073,11 +1081,8 @@ class openFileOverSshCommand(sublime_plugin.WindowCommand):
 			if useShell:
 				viewToShell[view.id()] = self.argz["sshShell"]
 
-			#used to set the view/buffer path which prevents the save dialog from showing up on file save
-			#it also looks nice when you right click on the file name at the top of the window
-			#...well as nice as it can ;)
-			view.settings().set("ssh_fake_path", self.argz["server"] + "/" + path)
 			view.settings().set("ssh_server", self.argz["server"])
+			view.settings().set("ssh_port", self.argz["port"])
 			view.settings().set("ssh_path", path)
 			view.set_status("ssh_true", "Saving to " + self.argz["server"] + ":" + path)
 
@@ -1105,7 +1110,8 @@ class openFileOverSshTextCommand(sublime_plugin.TextCommand):
 
 	def run(self, edit):
 
-		cmd = "cat -- " + shlex.quote(self.view.settings().get("ssh_path"))
+		settings = self.view.settings()
+		cmd = "cat -- " + shlex.quote(settings["ssh_path"])
 		setRO = False
 
 		#read
@@ -1118,14 +1124,14 @@ class openFileOverSshTextCommand(sublime_plugin.TextCommand):
 
 		else:
 
-			p = subprocess.Popen(["ssh", *getSshArgs(), self.view.settings().get("ssh_server"), cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=getStartupInfo())
+			p = subprocess.Popen(["ssh", *getSshArgs(port=settings.get("ssh_port")), settings["ssh_server"], cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=getStartupInfo())
 			txt, err = p.communicate()
 			code = p.returncode
 
 
 		#error
 		if code != 0 and not (code == 1 and b"No such file or directory" in err): #ok to open a non existent file
-			path = f"{self.view.settings().get('ssh_server')}:{self.view.settings().get('ssh_path')}"
+			path = f"{settings['ssh_server']}:{settings['ssh_path']}"
 			sshErr = code == 255 or code < 0
 			txt = (
 				makeErrorText(f"{'Failed' if sshErr else 'Unable'} to open this remote file ({path})", code, err) +
@@ -1149,9 +1155,12 @@ class openFileOverSshEventListener(sublime_plugin.ViewEventListener):
 	def __init__ (self, view):
 
 		self.view = view
+		self.settings = view.settings()
 		self.diffRef = ""
 		self.viewName = True #name has to change each time its set
 		self.dirtyWhenDoHacks = False #used to not set_scratch(True) on failed save
+
+		self.FAKE_LOCAL_PATH = self.settings["ssh_server"] + "/" + self.settings["ssh_path"] #nice file and path name
 
 	@classmethod
 	def is_applicable(cls, settings):
@@ -1176,7 +1185,7 @@ class openFileOverSshEventListener(sublime_plugin.ViewEventListener):
 		"""
 		self.viewName = not self.viewName
 		self.view.set_name(str(self.viewName)) #sets the name so retarget() will behave (see above)
-		self.view.retarget(self.view.settings().get("ssh_fake_path")) #sets the view/buffer path so the file name looks nice
+		self.view.retarget(self.FAKE_LOCAL_PATH) #sets the view/buffer path so the file name looks nice
 		self.view.set_reference_document(self.diffRef) #set the diff ref to the saved original file (otherwise the diffs are all messed up)
 		if not self.dirtyWhenDoHacks:
 			self.view.set_scratch(True) #on_mod sets this to false
@@ -1260,11 +1269,11 @@ class openFileOverSshEventListener(sublime_plugin.ViewEventListener):
 
 		if not self.view.is_read_only(): #don't save the error message lol
 
-			p = subprocess.Popen(["ssh", *getSshArgs(), self.view.settings().get("ssh_server"), "cat > " + shlex.quote(self.view.settings().get("ssh_path"))], stdin=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=getStartupInfo()) #ssh cp stdin to remote file
+			p = subprocess.Popen(["ssh", *getSshArgs(port=self.settings.get("ssh_port")), self.settings["ssh_server"], "cat > " + shlex.quote(self.settings["ssh_path"])], stdin=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=getStartupInfo()) #ssh cp stdin to remote file
 			_, err = p.communicate(self.view.substr(sublime.Region(0, self.view.size())).encode("UTF-8")) #set stdin to the buffer contents
 
 			if p.returncode != 0:
-				sublime.error_message(makeErrorText(f"Unable to save remote file {self.view.settings().get('ssh_server')}:{self.view.settings().get('ssh_path')}", p.returncode, err))
+				sublime.error_message(makeErrorText(f"Unable to save remote file {self.settings['ssh_server']}:{self.settings['ssh_path']}", p.returncode, err))
 				self.dirtyWhenDoHacks = True
 
 		else:

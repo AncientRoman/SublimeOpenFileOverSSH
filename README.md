@@ -39,11 +39,12 @@ The list input also contains various actions related to opening files.
 * Select _Options_ to edit the current file browser session's settings (See [Settings](#settings) for persistent changes)
 
 #### Advanced
-The server input can also accept paths similar to scp.
+The server input can accept other arguments such as paths similar to scp.
 
 * Use a folder path (`user@server.ext:/path/to/folder/`) to open the file browser at a specific folder
 * Use a file path (`user@server:path/to/file.txt`) to directly open a file without triggering the picker
 * The username can be omitted to use the default user (`server.ext:`)
+* A port can be specified using colon syntax (`user@server:port:`)
 
 The file browser shows the size of files in powers of 2 (MiB) and the number of subdirectories in a directory.
 
