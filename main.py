@@ -1084,7 +1084,6 @@ class openFileOverSshCommand(sublime_plugin.WindowCommand):
 			view.settings().set("ssh_server", self.argz["server"])
 			view.settings().set("ssh_port", self.argz["port"])
 			view.settings().set("ssh_path", path)
-			view.set_status("ssh_true", "Saving to " + self.argz["server"] + ":" + path)
 
 			file.close()
 
@@ -1158,9 +1157,19 @@ class openFileOverSshEventListener(sublime_plugin.ViewEventListener):
 		self.settings = view.settings()
 		self.diffRef = ""
 		self.viewName = True #name has to change each time its set
-		self.dirtyWhenDoHacks = False #used to not set_scratch(True) on failed save
+		self.dirtyWhenDoHacks = False #used to not set_scratch(True) e.g. on failed save
 
 		self.FAKE_LOCAL_PATH = self.settings["ssh_server"] + "/" + self.settings["ssh_path"] #nice file and path name
+
+		view.set_status("ssh_true", "Saving to " + self.settings["ssh_server"] + ":" + self.settings["ssh_path"])
+
+		#check if this event listener is added to an existing remote view e.g. opening after a hot exit
+		if view.file_name() == self.FAKE_LOCAL_PATH:
+			#on_load will not be called so must set up hacks here
+			self.view.set_name("SOFOS") #ensure doHack's name will be different from the current name
+			self.diffRef = self.view.substr(sublime.Region(0, self.view.size()))
+			self.dirtyWhenDoHacks = view.is_dirty()
+			self.doHacks()
 
 	@classmethod
 	def is_applicable(cls, settings):
