@@ -310,6 +310,10 @@ class Argz(dict):
 	def _flatPath(self): #flattened self._path
 		return self._oldPath[:self._flatLen]
 
+	def reset(self):
+
+		self.clear() #clear the dictionary
+		self.__init__()
 
 	"""
 	 * This class is all about path and strPath
@@ -485,6 +489,9 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 
 		self.settings.set("server", text)
 		sublime.save_settings(SETTINGS_FILE)
+
+		if "server" in self.argz:
+			self.argz.reset() #makes the most sense to have connecting to a server start a new session
 
 		sep = text.index(":")
 		sep2 = text.rindex(":")
@@ -873,10 +880,12 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 	def list_items(self):
 
 		#setup
+		lessXSI = self.argz.get("lessXSI")
 		path = self.ssh.quote(self.argz.strPath)
-		cmd = f"/bin/ls -1Lp -lgo {'-a' if self.argz.settings['hiddenFiles'] else ''} -- {path}"
+		cmd = f"/bin/ls -1Lp {'-lgo' if not lessXSI else ''} {'-a' if self.argz.settings['hiddenFiles'] else ''} -- {path}"
 		files, retCode, err = self.ssh.runCmd(cmd)
-		files = files[1:] #skip the total line
+		if not lessXSI:
+			files = files[1:] #skip the total line
 		items = []
 		hasFile = False
 		self.error = None
@@ -897,8 +906,12 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 				msg += "No such file or directory"
 			elif "permission denied" in lower:
 				msg += "Permission denied"
+			elif ("unrecognized option" in lower or "invalid option" in lower) and not lessXSI:
+				self.argz["lessXSI"] = True
+				return self.list_items()
 			else:
 				msg += "Unrecognized error"
+				print("OpenFileOverSSH: ls failed:", self.error)
 
 			self.error = f"Exit code {retCode}; " + self.error
 			return [sublime.ListInputItem(msg, None, annotation="Error", kind=self.Kind.ERROR)]
@@ -907,7 +920,7 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 		for file in files:
 
 			#split
-			fileInfo = file.split(maxsplit=6) #perms, links, bytes, dt1, dt2, dt3, name; requires LC_TIME=POSIX
+			fileInfo = file.split(maxsplit=6) if not lessXSI else [""]*6 + [file] #perms, links, bytes, dt1, dt2, dt3, name; requires LC_TIME=POSIX
 			lsConfused = False
 
 			#check
@@ -932,13 +945,14 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 				except ValueError:
 					size = "?"
 
+				annotation = f"->{size}"
 				kind = self.Kind.FOLDER
 
 			else: #file
 				try:
-					size = self.prettySize(int(fileInfo[2]))
+					annotation = self.prettySize(int(fileInfo[2]))
 				except ValueError:
-					size = fileInfo[2]
+					annotation = fileInfo[2]
 
 				kind = self.Kind.FILE
 				hasFile = True
@@ -947,7 +961,7 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 				kind = self.Kind.CONFUSED
 
 			#item
-			items.append(sublime.ListInputItem(file, file, annotation=f"->{size}" if isFolder else size, kind=kind))
+			items.append(sublime.ListInputItem(file, file, annotation=annotation if not lessXSI else "", kind=kind))
 
 
 		#actions and warnings
@@ -990,7 +1004,7 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 	def preview(self, value):
 
 		if value == None:
-			return self.error or "No items found. You can use the New action to create a file."
+			return self.collapse(self.error, 100) if self.error else "No items found. You can use the New action to create a file."
 		if not self.isPath(value):
 			preview = self.Action(value).preview
 			return preview(self) if callable(preview) else preview

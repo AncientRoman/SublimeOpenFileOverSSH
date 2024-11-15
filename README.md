@@ -58,8 +58,8 @@ The file transferring is done using Popen's stdin and stdout to ssh, not scp.
 
 The file selection is done by opening an ssh connection after the server is input and `ls` is used to populate the folder/file list on demand.
 
-The only requirements of this plugin are the command `ssh` (which preferably supports OpenSSH config options) on the local machine and and a POSIX compliant shell on the remote machine.
-In particular, the remote machine should support the POSIX `ls`, `printf`, `cat`, redirection (`>`), `test` (for [Path Checking](#path-checking)), globing (`*`) (to use \* to open files matching a pattern), and `mkdir` (to use _New_ to create folders). However, if a file is opened without triggering the picker (see [Advanced Usage](#advanced)) only `cat` and `>` are needed.
+The only requirements of this plugin are the command `ssh` (which preferably supports OpenSSH config options) on the local machine and and a POSIX compliant shell on the remote machine. In particular, the remote machine should support the POSIX `ls`, `printf`, `cat`, redirection (`>`), `test` (for [Path Checking](#path-checking)), globing (`*`) (to use \* to open files matching a pattern), and `mkdir` (to use _New_ to create folders). However, if a file is opened without triggering the picker (see [Advanced Usage](#advanced)) only `cat` and `>` are needed.<br>
+Some of the file browser's features require the XSI extensions to `ls`. The browser attempts to detect non XSI implementations and will reduce its feature set if possible.
 
 ## Settings
 Open the settings file with one of these options.
