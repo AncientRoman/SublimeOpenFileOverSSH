@@ -10,6 +10,18 @@
 	*/
 	//"showHiddenFiles": false,
 
+
+	/*
+	 * Actions: extra functionality and information within the file browser
+	 * Accepts an ordered array of action names to show in the file browser by default.
+	 * The always-shown Options action can enable any action within a session; this setting just controls the defaults.
+	 * Available actions are glob, new, lastDir, pwd, and sysI.
+	 * Note that informational actions (pwd and sysI) may lag the browser on slower connections because they run additional remote commands.
+	 * Some actions such as glob and lastDir depend on the contents and path of the file browser and will only show if they apply.
+	*/
+	//"actions": ["glob", "new"],
+
+
 	/*
 	 * SSH Multiplexing:
 	 *  speeds up connection and authentication when browsing and saving files in short succession.
@@ -49,12 +61,6 @@
 	*/
 	//"pathChecking": true,
 
-
-	/*
-	 * Show Last Directory Action
-	 * Whether or not to show the Last Dir action which jumps into the previous session's directory.
-	*/
-	//"lastDirAction": false,
 
 
 	/*

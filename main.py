@@ -251,11 +251,10 @@ class SshShell():
 			except (BrokenPipeError, OSError):
 				pass
 			try:
-				self.shell.stdin.close()
+				self.shell.stdin.close() #will also close the ssh process
 			except (BrokenPipeError, OSError):
 				pass
 
-			print("OpenFileOverSSH: Waiting for ssh to exit...")
 			try:
 				self.shell.wait(timeout)
 			except TimeoutExpired:
@@ -266,15 +265,16 @@ class SshShell():
 				except TimeoutExpired:
 					self.shell.kill()
 					self.shell.wait()
-			print("OpenFileOverSSH: ssh finished with return code %d" % self.shell.returncode)
+
+			if self.retCode != 0:
+				print("OpenFileOverSSH: ssh finished with return code %d" % self.shell.returncode)
 
 
 		#clean up
 		try:
 			self.thread.join() #join thread to free up resources
-			print("OpenFileOverSSH: ssh thread joined")
-		except AttributeError:
-			print("OpenFileOverSSH: no ssh thread cleanup needed")
+		except AttributeError: #no thread to join
+			pass
 
 	def __del__(self):
 
@@ -288,7 +288,7 @@ class Argz(dict):
 	SESS_SETTINGS_DATA = [
 		("pathChecking", True),
 		("hiddenFiles", "showHiddenFiles", False),
-		("lastDirAct", "lastDirAction", False)
+		("actions", ["glob", "new"])
 	]
 
 	def __init__(self):
@@ -300,6 +300,7 @@ class Argz(dict):
 		for item in self.SESS_SETTINGS_DATA:
 			pref = self.__class__.settings.get(item[0 if len(item) == 2 else 1])
 			self.settings[item[0]] = pref if pref != None else item[-1]
+		self.settings["actions"] = [action.lower() for action in self.settings["actions"]]
 
 		self._path = [] #array of tuples or strings containing path components (folders or files); each item is one InputHandler
 		self._strPath = "" #string representation of path
@@ -732,13 +733,6 @@ class optionsInputHandler(sublime_plugin.ListInputHandler):
 			lambda settings: f"Show Errors {'After' if settings['pathChecking'] else 'Before'} Selection",
 			"togglePathChecking"
 		)
-		LASTDIR = (
-			"Toggle Last Dir Action",
-			"last dir",
-			"/",
-			lambda settings: f"{'Hide' if settings['lastDirAct'] else 'Show'} Last Directory",
-			"toggleLastDir"
-		)
 
 		def __new__(cls, text, annotation, kLetter, preview, action):
 
@@ -750,6 +744,8 @@ class optionsInputHandler(sublime_plugin.ListInputHandler):
 			obj.action = action
 			return obj
 
+	ACTIONS = ("glob", "new", "lastDir", "pwd", "sysI") #addable actions
+
 
 	@staticmethod
 	def toggleHiddenFiles(settings):
@@ -758,10 +754,6 @@ class optionsInputHandler(sublime_plugin.ListInputHandler):
 	@staticmethod
 	def togglePathChecking(settings):
 		settings["pathChecking"] = not settings["pathChecking"]
-
-	@staticmethod
-	def toggleLastDir(settings):
-		settings["lastDirAct"] = not settings["lastDirAct"]
 
 
 	def __init__(self, argz):
@@ -776,21 +768,33 @@ class optionsInputHandler(sublime_plugin.ListInputHandler):
 		kColor = pathInputHandler.Kind.ACTION[0]
 		kOther = pathInputHandler.Kind.ACTION[2:]
 
-		return [sublime.ListInputItem(option.value, option.value, annotation=option.annotation, kind=(kColor, option.kLetter) + kOther) for option in self.Option]
+		arr = [sublime.ListInputItem(option.value, option.value, annotation=option.annotation, kind=(kColor, option.kLetter) + kOther) for option in self.Option]
+
+		for i, action in enumerate(self.ACTIONS):
+			if action.lower() not in self.settings["actions"]:
+				arr.append(sublime.ListInputItem(f"Add {action}", i, annotation="enable action", kind=pathInputHandler.Kind.ACTION))
+
+		return arr
 
 	#display preview
 	def preview(self, value):
 
-		preview = self.Option(value).preview
-		return preview(self.settings) if callable(preview) else preview
+		if isinstance(value, str):
+			preview = self.Option(value).preview
+			return preview(self.settings) if callable(preview) else preview
+		if isinstance(value, int):
+			return f"Enable the {self.ACTIONS[value]} action"
 
 	#run action
 	def confirm(self, value):
 
-		try:
-			getattr(self, self.Option(value).action)(self.settings)
-		except AttributeError:
-			print(f"OpenFileOverSSH: Bad Option function name: {self.Option(value).action}")
+		if isinstance(value, str):
+			try:
+				getattr(self, self.Option(value).action)(self.settings)
+			except AttributeError:
+				print(f"OpenFileOverSSH: Bad Option function name: {self.Option(value).action}")
+		else:
+			self.settings["actions"].append(self.ACTIONS[value].lower())
 
 	#pop back
 	def next_input(self, args):
@@ -807,12 +811,14 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 		FILE = (sublime.KindId.COLOR_YELLOWISH, "f", "")
 		FOLDER = (sublime.KindId.COLOR_CYANISH, "F", "")
 		ACTION = (sublime.KindId.COLOR_PURPLISH, "-", "")
+		INFO = (sublime.KindId.COLOR_PURPLISH, "ⓘ", "")
 		CONFUSED = (sublime.KindId.COLOR_ORANGISH, "?", "")
 		ERROR = (sublime.KindId.COLOR_REDISH, "!", "")
 
 	#ListInputItem value must be a sublime.Value so this class helps store InputHandlers in the ListInputItem
 	class Action(int, Enum):
 
+		NOOP = 0, "", None
 		GLOB = 1, "Open Multiple Files with a Glob", globInputHandler
 		NEW = 2, "Make a New File or Folder Here", newInputHandler
 		OPTIONS = 3, lambda self: f"Edit Session Options such as {'hiding' if self.argz.settings['hiddenFiles'] else 'showing'} hidden files", optionsInputHandler
@@ -890,6 +896,7 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 		hasFile = False
 		self.error = None
 
+
 		#check ls
 		if retCode != 0 and len(files) == 0: #ls can fail on one file, return a failed code, and list the other files normally. Usually caught by lsConfused logic
 
@@ -915,6 +922,7 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 
 			self.error = f"Exit code {retCode}; " + self.error
 			return [sublime.ListInputItem(msg, None, annotation="Error", kind=self.Kind.ERROR)]
+
 
 		#do
 		for file in files:
@@ -964,24 +972,44 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 			items.append(sublime.ListInputItem(file, file, annotation=annotation if not lessXSI else "", kind=kind))
 
 
-		#actions and warnings
-		if self.argz.pathPeek() == None:
-			items.append(sublime.ListInputItem("/", ("/",), annotation="Root Dir", kind=self.Kind.ACTION)) #tuple to disable ../ popping
-		if hasFile:
-			items.append(sublime.ListInputItem("*", self.Action.GLOB, annotation="Pattern", kind=self.Kind.ACTION))
-		items.append(sublime.ListInputItem("New", self.Action.NEW, annotation="Create", kind=self.Kind.ACTION))
-
-		if self.argz.settings["lastDirAct"]:
-			path = self.argz.completionsToPastPath()
-			path = path[:-1] if path and not (self.isPath(path[-1]) and self.isFolder(path[-1])) else path #remove file/action if needed
-			if path:
-				path = path if len(path) > 1 else path[0] #de-tuple if needed for ../ handling
-				items.append(sublime.ListInputItem("Last Dir", path, annotation=self.collapse("".join(path)[:-1], 49, "/")+"/", kind=self.Kind.ACTION))
-
-		items.append(sublime.ListInputItem("Options", self.Action.OPTIONS, annotation="Session Prefs", kind=self.Kind.ACTION))
-
+		#warning
 		if self.error:
 			items.insert(0, sublime.ListInputItem("WARNING: A Parsing Error Occurred and some Entries are Missing or Wrong", None, annotation="Warning", kind=self.Kind.ERROR))
+
+
+		#actions
+		if self.argz.pathPeek() == None:
+			items.append(sublime.ListInputItem("/", ("/",), annotation="Root Dir", kind=self.Kind.ACTION)) #tuple to disable ../ popping
+
+		for action in self.argz.settings["actions"]: #I could make a dictionary mapping strings to functions....or just do this
+
+			if action == "glob":
+				if hasFile:
+					items.append(sublime.ListInputItem("*", self.Action.GLOB, annotation="Pattern", kind=self.Kind.ACTION))
+
+			elif action == "new":
+				items.append(sublime.ListInputItem("New", self.Action.NEW, annotation="Create", kind=self.Kind.ACTION))
+
+			elif action == "lastdir":
+				comps = self.argz.completionsToPastPath()
+				comps = comps[:-1] if comps and not (self.isPath(comps[-1]) and self.isFolder(comps[-1])) else comps #remove file/action if needed
+				if comps:
+					comps = comps if len(comps) > 1 else comps[0] #de-tuple if needed for ../ handling
+					items.append(sublime.ListInputItem("Last Dir", comps, annotation=self.collapse("".join(comps)[:-1], 49, "/")+"/", kind=self.Kind.ACTION))
+
+			elif action == "pwd":
+				pwd = self.ssh.runCmd(f"(cd {path} && pwd)", False)[0] #using a subshell because current directory doesn't/mustn't change
+				items.append(sublime.ListInputItem("pwd", self.Action.NOOP, annotation=pwd, kind=self.Kind.INFO))
+
+			elif action == "sysi":
+				if "sysI" not in self.argz:
+					self.argz["sysI"] = " ".join(self.ssh.runCmd('uname -mnrs; printf "%s\\n" "$0"')[0])
+				items.append(sublime.ListInputItem("sys", self.Action.NOOP, annotation=self.argz["sysI"], kind=self.Kind.INFO))
+
+			else:
+				print(f"OpenFileOverSSH: Unrecognized action ({action}), ignoring")
+
+		items.append(sublime.ListInputItem("Options", self.Action.OPTIONS, annotation="Session Prefs", kind=self.Kind.ACTION))
 
 
 		#default selection
@@ -1016,7 +1044,7 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 	#check file/folder
 	def validate(self, value):
 
-		if value == None:
+		if not value:
 			return False
 
 		if self.isPath(value) and self.argz.settings["pathChecking"]:

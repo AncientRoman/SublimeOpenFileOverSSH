@@ -30,13 +30,14 @@ Once triggered, input the server details and browse/open remote files as follows
 1. Type in the scp-like path to your server (`user@server.ext:`), and press enter
 2. Once the server is validated and connected, a list input will appear which allows you to choose a folder or file
 3. Continue browsing the file system on your server until you find the file you want to open
-4. Enjoy finally being able to edit a remote file in sublime (2505 students amirite)
+4. Enjoy finally being able to edit a remote file in sublime (CS2505 students amirite)
 
-The list input also contains various actions related to opening files.
+The file browser also contains various actions related to opening files.
 
-* Select the star (\*) to enter a pattern like `*.c *.h`
+* Select the star (\*) to enter and open a pattern like `*.c *.h`
 * Select _New_ to create new folders and open new files
 * Select _Options_ to edit the current file browser session's settings (See [Settings](#settings) for persistent changes)
+* See the [Actions Setting](#actions) to enable additional actions
 
 #### Advanced
 The server input can accept other arguments such as paths similar to scp.
@@ -71,6 +72,11 @@ Open the settings file with one of these options.
 #### Hidden Files
 Use the `showHiddenFiles` setting to show/hide hidden files in the file browser.<br>
 By default, hidden files are not shown.
+
+#### Actions
+The `actions` settings controls the order and visibility of the available file browser actions.<br>
+It accepts an array of action names consisting of `["glob", "new", "lastDir", "pwd", "sysI"]`.<br>
+The default is `["glob", "new"]`.
 
 #### Multiplexing
 Ssh's multiplexing feature is used to speed up connection and authentication when browsing and saving files in short succession.<br>
