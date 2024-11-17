@@ -291,9 +291,10 @@ class Argz(dict):
 		("actions", ["glob", "new"])
 	]
 
-	def __init__(self):
+	def __init__(self, **kargs):
 
-		super().__init__() #extend dict
+		self.kargs = kargs
+		super().__init__(**kargs) #extend dict
 
 		#session settings
 		self.settings = {}
@@ -314,7 +315,7 @@ class Argz(dict):
 	def reset(self):
 
 		self.clear() #clear the dictionary
-		self.__init__()
+		self.__init__(**self.kargs)
 
 	"""
 	 * This class is all about path and strPath
@@ -448,10 +449,11 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 	def validate(self, text):
 
 		type = self.checkSyntax(text)
-
 		if not type:
 			return False
+
 		if type == 5:
+			self.ssh = None #ensure there is no shell e.g. if the user connects to a different server before a type 5
 			return True
 
 		server = text[:text.index(":")]
@@ -482,7 +484,7 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 				sublime.error_message(f"Unable to access (open) '{path}'\n({msg})")
 				return False
 
-		self.ssh = ssh #only save if it'll be used
+		self.ssh = ssh #only save if it'll be used i.e. let the shell close now if it's not used
 		return True
 
 	#save value
@@ -1042,24 +1044,36 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 			return "Open File"
 
 	#check file/folder
-	def validate(self, value):
+	def validate(self, value, evt):
 
 		if not value:
 			return False
 
-		if self.isPath(value) and self.argz.settings["pathChecking"]:
+		if self.isPath(value):
+			isFold = self.isFolder(value)
 
-			path = self.ssh.quote(self.argz.strPath + "".join(value))
-			_, code, _ = self.ssh.runCmd(f"test -{'x' if self.isFolder(value) else 'r'} {path}")
+			#path checking
+			if self.argz.settings["pathChecking"]:
 
-			if code == 1: #greater than 1 means test errored
-				sublime.error_message(f"Unable to access ({'open' if self.isFolder(value) else 'read'}) '{value}'\n(Permission Denied)")
+				path = self.ssh.quote(self.argz.strPath + "".join(value))
+				_, code, _ = self.ssh.runCmd(f"test -{'x' if isFold else 'r'} {path}")
+
+				if code == 1: #greater than 1 means test errored
+					sublime.error_message(f"Unable to access ({'open' if isFold else 'read'}) '{value}'\n(Permission Denied)")
+					return False
+
+
+			#mod key opening
+			if not isFold and ("shift" in evt["modifier_keys"] or "primary" in evt["modifier_keys"]):
+				self.argz["window"].run_command("open_file_over_ssh",
+					{"server": self.argz["server"], "paths": [self.argz.strPath + value], "port": self.argz["port"], "useArgzShell": True}
+				)
 				return False
 
 		return True
 
 	#push/update
-	def confirm(self, value):
+	def confirm(self, value, evt):
 
 		#next_input cannot determine if ../ should BackInputHandler because the path will already be updated, so it'll use self.popped
 		self.popped = value == self.parentDir and not isinstance(self.argz.pathPeek(), (type(None), tuple)) and not self.argz.strPath.endswith(self.parentDir) #if ../ should pop
@@ -1100,19 +1114,34 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 	def description(self, value, text):
 		return "".join(value) if self.isPath(value) else text
 
+	#extra event param
+	def want_event(self):
+		return True
+
 
 #the command that is run from the command pallet
 class openFileOverSshCommand(sublime_plugin.WindowCommand):
 
-	def run(self, **args):
+	def run(self, server, paths=None, **args):
+
+		#sort out self.argz (input()) vs paths (manual)
+		if paths == None and hasattr(self, "argz") and "paths" in self.argz:
+			args = self.argz #run from input()
+		elif paths != None:
+			args = {"server": server, "paths": paths, **args}
+			if "useArgzShell" in args:
+				args["sshShell"] = self.argz["sshShell"] #command arguments have to be sublime.Value so can't pass sshShell directly
+		else:
+			print("OpenFileOverSSH: command run without all required arguments (server, paths)")
+			return
+
 
 		#because everything happens synchronously, using the open sshShell is faster than multiplexing by a noticeable amount when opening 10+ files
 		#however, using the sshShell requires that the file must not contain a line with the seeking string
 		#while that is an unlikely occurrence, I will use multiplexing if its available when opening a single file to ensure a non-glob is always opened correctly
+		useShell = args.get("sshShell") and (len(args["paths"]) > 1 or "ControlMaster=auto" not in getSshArgs()) #i.e. isMultipleFiles || isMultiplexingDisabled
 
-		useShell = self.argz["sshShell"] and (len(self.argz["paths"]) > 1 or "ControlMaster=auto" not in getSshArgs()) #i.e. isMultipleFiles || isMultiplexingDisabled
-
-		for path in self.argz["paths"]:
+		for path in args["paths"]:
 
 			#open a temp file with the correct extension
 			#I can't just make a new file because I want the syntax to be set based on the remote file's extension
@@ -1121,19 +1150,20 @@ class openFileOverSshCommand(sublime_plugin.WindowCommand):
 			view = self.window.open_file(file.name)
 
 			if useShell:
-				viewToShell[view.id()] = self.argz["sshShell"]
+				viewToShell[view.id()] = args["sshShell"]
 
-			view.settings().set("ssh_server", self.argz["server"])
-			view.settings().set("ssh_port", self.argz["port"])
+			view.settings().set("ssh_server", args["server"])
+			view.settings().set("ssh_port", args.get("port"))
 			view.settings().set("ssh_path", path)
 
 			file.close()
 
-		del self.argz["sshShell"] #remove this ref so the SshShell.__del__() function is called
+		if paths == None:
+			del self.argz #no need to keep this around and allows the SshShell.__del__() function to be called
 
 	def input(self, args):
 
-		self.argz = Argz()
+		self.argz = Argz(window=self.window)
 		return serverInputHandler(self.argz)
 
 

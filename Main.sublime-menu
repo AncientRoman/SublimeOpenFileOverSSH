@@ -6,12 +6,7 @@
 		[
 			{
 				"caption": "Open via SSH",
-				"command": "show_overlay",
-				"args":
-				{
-					"overlay": "command_palette",
-					"command": "open_file_over_ssh"
-				}
+				"command": "open_file_over_ssh"
 			}
 		]
 	},

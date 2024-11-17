@@ -31,6 +31,7 @@ Once triggered, input the server details and browse/open remote files as follows
 2. Once the server is validated and connected, a list input will appear which allows you to choose a folder or file
 3. Continue browsing the file system on your server until you find the file you want to open
 4. Enjoy finally being able to edit a remote file in sublime (CS2505 students amirite)
+5. Press shift or command while selecting a file to open the file in the background without closing the file browser
 
 The file browser also contains various actions related to opening files.
 
@@ -48,6 +49,9 @@ The server input can accept other arguments such as paths similar to scp.
 * A port can be specified using colon syntax (`user@server:port:`)
 
 The file browser shows the size of files in powers of 2 (MiB) and the number of subdirectories in a directory.
+
+This plugin adds the window command `open_file_over_ssh` which accepts `server` string and `paths` array arguments with an optional `port`. You can use this to write your own keybindings, commands, or shortcuts.<br>
+Use like: `window.run_command("open_file_over_ssh", {"server": "user@server", "paths": ["path/to/file1", "path/to/file2.txt"]})`.
 
 ## Important
 You will need to setup ssh public/private key login to your remote machine so this plugin can connect to your server in the background without needing a password.

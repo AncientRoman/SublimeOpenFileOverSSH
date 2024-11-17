@@ -4,12 +4,7 @@
 	//Activate it by placing it in your Default.sublime-keymap file
 	{
 		"keys": ["primary+shift+o"],
-		"command": "show_overlay",
-		"args":
-		{
-			"overlay": "command_palette",
-			"command": "open_file_over_ssh"
-		}
+		"command": "open_file_over_ssh"
 	}
 	*/
 ]
