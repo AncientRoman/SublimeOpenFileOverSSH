@@ -1066,8 +1066,15 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 			#mod key opening
 			if not isFold and ("shift" in evt["modifier_keys"] or "primary" in evt["modifier_keys"]):
 				self.argz["window"].run_command("open_file_over_ssh",
-					{"server": self.argz["server"], "paths": [self.argz.strPath + value], "port": self.argz["port"], "useArgzShell": True}
+					{"server": self.argz["server"], "paths": [self.argz.strPath + "".join(value)], "port": self.argz["port"], "useArgzShell": True}
 				)
+				return False
+
+			#alt key setting path
+			if "alt" in evt["modifier_keys"]:
+				self.argz.pathAppend(tuple(value) if isinstance(value, list) else value)
+				self.argz.savePath()
+				self.argz.pathPop()
 				return False
 
 		return True

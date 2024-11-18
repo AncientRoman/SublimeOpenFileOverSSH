@@ -1,6 +1,9 @@
 # SublimeOpenFileOverSSH v1.5.0
 A lightweight Sublime Text 4 plugin that allows a file to be opened on a remote machine over ssh and seamlessly edited and saved back to the remote machine
 
+[![Open File Over SSH Command Pallet](resources/pallet.png)](#usage)<br>
+[![Remote File Status Bar](resources/status.png)](#how-it-works)
+
 ## Installation
 This plugin works on MacOS, Linux, and Windows.
 
@@ -8,7 +11,7 @@ This plugin works on MacOS, Linux, and Windows.
 Sublime's [Package Control](https://packagecontrol.io/installation) is the best and easiest way to install this plugin.
 
 1. Run the _Package Control: Install Package_ command from the command pallet
-2. Search for and select `OpenFileOverSSH`
+2. Search for and select [`OpenFileOverSSH`](https://packagecontrol.io/packages/OpenFileOverSSH)
 3. Package Control will automatically install and keep this package up to date
 
 ### Manual
@@ -51,7 +54,7 @@ The server input can accept other arguments such as paths similar to scp.
 The file browser shows the size of files in powers of 2 (MiB) and the number of subdirectories in a directory.
 
 This plugin adds the window command `open_file_over_ssh` which accepts `server` string and `paths` array arguments with an optional `port`. You can use this to write your own keybindings, commands, or shortcuts.<br>
-Use like: `window.run_command("open_file_over_ssh", {"server": "user@server", "paths": ["path/to/file1", "path/to/file2.txt"]})`.
+Use like: `window.run_command("open_file_over_ssh", {"server": "user@server", "paths": ["path/to/file1", "/path/to/file2.txt"]})`.
 
 ## Important
 You will need to setup ssh public/private key login to your remote machine so this plugin can connect to your server in the background without needing a password.
