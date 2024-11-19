@@ -1,8 +1,13 @@
 # SublimeOpenFileOverSSH v1.5.0
 A lightweight Sublime Text 4 plugin that allows a file to be opened on a remote machine over ssh and seamlessly edited and saved back to the remote machine
 
-[![Open File Over SSH Command Pallet](resources/pallet.png)](#usage)<br>
-[![Remote File Status Bar](resources/status.png)](#how-it-works)
+<!--
+ - This is a large image for retina displays (2x) to help reduce blur on the small text
+ - Github doesn't support the srcset <img> tag, so this manually sets the width to 743 (half of the image's 1487)
+-->
+<a href="#usage">
+	<img src="resources/pallet_and_status.png" alt="Open File Over SSH Command Pallet and Status" width="743">
+</a>
 
 ## Installation
 This plugin works on MacOS, Linux, and Windows.
