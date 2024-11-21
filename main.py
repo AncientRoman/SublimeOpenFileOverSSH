@@ -22,6 +22,7 @@ from enum import Enum
  *
  * The middle of this file has the Input Pallet stuff which is best read starting with the serverInputHandler and then the pathInputHandler.
  * The other InputHandlers are for the extra actions (glob, new, and options).
+ * Right below the handlers is the open_file_over_ssh command which can be run manually (e.g. from a keybinding) for personal automation.
  *
  * The top of this file includes ssh and popen args which contain the multiplexing information.
  * The custom SshShell class below those functions handles the Input Pallet's persistent ssh connection.
@@ -1070,7 +1071,7 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 				)
 				return False
 
-			#alt key setting path
+			#alt key path saving
 			if "alt" in evt["modifier_keys"]:
 				self.argz.pathAppend(tuple(value) if isinstance(value, list) else value)
 				self.argz.savePath()
@@ -1126,9 +1127,10 @@ class pathInputHandler(sublime_plugin.ListInputHandler):
 		return True
 
 
-#the command that is run from the command pallet
+#the command that is run from the command pallet (or manually)
 class openFileOverSshCommand(sublime_plugin.WindowCommand):
 
+	#when run manually: specify a server string (user@server) and a paths array of strings (["path/to/file", "/path/to/file2.txt"])
 	def run(self, server, paths=None, **args):
 
 		#sort out self.argz (input()) vs paths (manual)
@@ -1243,8 +1245,9 @@ class openFileOverSshEventListener(sublime_plugin.ViewEventListener):
 		view.set_status("ssh_true", "Saving to " + self.settings["ssh_server"] + ":" + self.settings["ssh_path"])
 
 		#check if this event listener is added to an existing remote view e.g. opening after a hot exit
-		if view.file_name() == self.FAKE_LOCAL_PATH:
+		if view.file_name().startswith(self.settings["ssh_server"]): #can't use == self.FAKE_LOCAL_PATH because windows version changes the "/" to something else
 			#on_load will not be called so must set up hacks here
+			#it'd be ok if this ran every __init__ but there's no reason to do all this if on_load is about to be called
 			self.view.set_name("SOFOS") #ensure doHack's name will be different from the current name
 			self.diffRef = self.view.substr(sublime.Region(0, self.view.size()))
 			self.dirtyWhenDoHacks = view.is_dirty()
