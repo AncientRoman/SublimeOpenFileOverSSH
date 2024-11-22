@@ -1,9 +1,9 @@
-# SublimeOpenFileOverSSH v1.5.0
+# SublimeOpenFileOverSSH v1.6.0
 A lightweight Sublime Text 4 plugin that allows a file to be opened on a remote machine over ssh and seamlessly edited and saved back to the remote machine
 
 <!--
  - This is a large image for retina displays (2x) to help reduce blur on the small text
- - Github doesn't support the srcset <img> tag, so this manually sets the width to 743 (half of the image's 1487)
+ - Github doesn't support the srcset <img> attribute, so this manually sets the width to 743 (half of the image's 1487)
 -->
 <a href="#usage">
 	<img src="resources/pallet_and_status.png" alt="Open File Over SSH Command Pallet and Status" width="743">
@@ -121,6 +121,7 @@ Key Bindings are disabled by default per Package Control requirements.<br>
 Enable the Open via SSH key binding by opening the key binding file in a similar manner as the settings file and copying over the disabled binding.
 
 ## What's New?
+v1.6: Added port selection, extra settings-controlled actions, background file opening, and hot exit support<br>
 v1.5: Added file size, hidden files, root dir (/), and remote error checking<br>
 v1.4.1: Fixed silently failing to connect on Windows and added additional error handling<br>
 v1.4: Added multiplexing, menu items, ssh error checking, new file/folder creation, ui updates, settings, and Package Control installation<br>

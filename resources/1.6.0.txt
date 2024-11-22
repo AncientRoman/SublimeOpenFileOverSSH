@@ -1,0 +1,24 @@
+OpenFileOverSSH v1.6
+
+Highlights:
+ * Remote port configuration
+ * More (non-default) actions
+ * Background file opening
+
+Changes:
+  * Added remote port configuration to the server input
+  * Actions:
+    # Added additional actions (lastDir)
+    # Added some informational pseudo-actions (pwd, sysI)
+    # Added an actions settings to control visibility and order of actions
+    # Hidden actions can be enabled on a per session basis (in Options)
+  * Added opening files in the background without closing the file browser via shift/command selection
+  * Fixed remote files triggering the save dialog and not displaying correctly after a hot exit
+  * Added support for (almost) non-XSI compliant systems e.g. busybox (which OpenWRT uses)
+
+See:
+ * https://github.com/AncientRoman/SublimeOpenFileOverSSH/releases/tag/1.6.0
+ * https://github.com/AncientRoman/SublimeOpenFileOverSSH
+for more info
+
+Enjoy!
