@@ -406,7 +406,7 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 
 		if not (
 			len(text) >= 2 and
-			text.count(":") == 1 or text.count(":") == 2 and text[text.index(":")+1:text.rindex(":")].isdecimal() and
+			(text.count(":") == 1 or text.count(":") == 2 and text[text.index(":")+1:text.rindex(":")].isdecimal()) and
 			("@" not in text or text.count("@") == 1 and text[0] != "@" and text.index("@") < text.index(":") - 1)
 		):
 			return False
@@ -429,12 +429,18 @@ class serverInputHandler(sublime_plugin.TextInputHandler):
 	#syntax check
 	def preview(self, text):
 
+		if not text:
+			return "Enter Server Address"
+
 		type = self.checkSyntax(text)
 
 		if not type:
-			return "Invalid Server Syntax"
+			ret = "Invalid Server Path"
+			if ":" not in text:
+				ret += " (missing ':')"
+			return ret
 
-		ret = "Server Input Valid"
+		ret = "Server Path Valid"
 		if type == 2:
 			ret += " for Default Username"
 		elif type == 3:
